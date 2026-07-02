@@ -66,6 +66,9 @@ ELEMENT_TYPES: frozenset[str] = frozenset(
         "Resource",
         "CourseOfAction",
         "ValueStream",
+        # Junctions are element types in the exchange format, not relationships
+        "AndJunction",
+        "OrJunction",
     }
 )
 
@@ -83,7 +86,6 @@ RELATIONSHIP_TYPES: frozenset[str] = frozenset(
         "Flow",
         "Specialization",
         "Association",
-        "Junction",
     }
 )
 

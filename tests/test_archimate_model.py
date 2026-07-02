@@ -17,7 +17,10 @@ def _model() -> ArchimateModel:
 
 def test_type_catalogues_contain_expected_entries() -> None:
     assert {"Stakeholder", "Driver", "Assessment", "Goal", "ApplicationComponent"} <= ELEMENT_TYPES
-    assert {"Association", "Influence", "Serving", "Junction"} <= RELATIONSHIP_TYPES
+    assert {"Association", "Influence", "Serving"} <= RELATIONSHIP_TYPES
+    # Junctions are element types in the exchange format, not relationship types
+    assert "Junction" not in RELATIONSHIP_TYPES
+    assert {"AndJunction", "OrJunction"} <= ELEMENT_TYPES
 
 
 def test_add_element_registers_element_with_defaults() -> None:

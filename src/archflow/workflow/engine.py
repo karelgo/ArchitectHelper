@@ -12,6 +12,7 @@ from archflow.domain.models import (
     PIPELINE,
     ArchitectureRequest,
     Artifact,
+    Classification,
     Decision,
     DecisionStatus,
     Review,
@@ -247,6 +248,22 @@ class WorkflowEngine:
         self._repo.save(request)
         return request
 
+    def set_triage(
+        self,
+        request_id: str,
+        classification: Classification,
+        impacted_domains: list[str] | None = None,
+    ) -> ArchitectureRequest:
+        """Record the triage outcome: classification and impacted domains."""
+        request = self._load(request_id)
+        request.classification = classification
+        if impacted_domains:
+            request.impacted_domains = impacted_domains
+        auto_complete(request)
+        request.touch()
+        self._repo.save(request)
+        return request
+
     # -- queries -------------------------------------------------------------
 
     def get(self, request_id: str) -> ArchitectureRequest | None:
@@ -256,3 +273,8 @@ class WorkflowEngine:
     def list_requests(self) -> list[ArchitectureRequest]:
         """All requests, most recently updated first."""
         return self._repo.list()
+
+    def events_for(self, request_id: str) -> list[Event]:
+        """Audit-trail events for one request, oldest first."""
+        self._load(request_id)  # 404-style KeyError for unknown ids
+        return self._events.for_request(request_id)
