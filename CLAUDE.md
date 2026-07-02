@@ -29,8 +29,15 @@ scripts/verify.sh                        # ruff + mypy + pytest (run before comm
   stakeholder-map generator.
 - `src/archflow/horizzon/` — BiZZdesign Horizzon client + publisher (falls
   back to Open Exchange file export when unconfigured).
-- `src/archflow/api/` (FastAPI, `create_app` factory) and `src/archflow/cli.py`
-  (Typer). `docs/` explains the process, architecture and Horizzon setup.
+- `src/archflow/api/` (FastAPI, `create_app` factory; `studio.py` router) and
+  `src/archflow/cli.py` (Typer). `docs/` explains the process, architecture,
+  Horizzon setup and the Studio.
+- `src/archflow/studio/` — view projects (ViewProject + StudioService);
+  `src/archflow/drawio.py` — ArchiMate ⇄ draw.io mxGraph conversion (cell ids
+  `el-<id>`/`rel-<id>` are the mapping contract — don't change them);
+  `src/archflow/assistant/` — the copilot (Anthropic tool-use loop; inject a
+  fake `messages_client` in tests, never call the network);
+  `src/archflow/ui/static/` — no-build vanilla ES-module web app at `/ui`.
 
 ## Rules that bite
 

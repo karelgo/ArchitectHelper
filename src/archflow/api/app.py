@@ -9,9 +9,13 @@ temporary database and stub actions:
 from __future__ import annotations
 
 from collections.abc import Callable
+from importlib import resources
 from typing import TypeVar
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 import archflow
 from archflow.api.schemas import (
@@ -25,8 +29,13 @@ from archflow.api.schemas import (
     StakeholderIn,
     TriageIn,
 )
+from archflow.api.studio import build_studio_router
+from archflow.assistant.copilot import ArchiMateCopilot
+from archflow.config import get_settings
 from archflow.domain.events import Event
 from archflow.domain.models import ArchitectureRequest, Stakeholder
+from archflow.storage import ViewProjectRepository, create_db_engine
+from archflow.studio.service import StudioService
 from archflow.workflow.engine import (
     AdvanceResult,
     GuardViolation,
@@ -37,8 +46,18 @@ from archflow.workflow.engine import (
 T = TypeVar("T")
 
 
-def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
-    """Build the ArchFlow REST API around a workflow engine."""
+class UiConfig(BaseModel):
+    drawio_embed_url: str
+    assistant_available: bool
+    version: str
+
+
+def create_app(
+    engine: WorkflowEngine | None = None,
+    studio: StudioService | None = None,
+    copilot_factory: Callable[[], ArchiMateCopilot] | None = None,
+) -> FastAPI:
+    """Build the ArchFlow REST API + Studio + web UI around a workflow engine."""
     app = FastAPI(
         title="ArchFlow API",
         version=archflow.__version__,
@@ -48,7 +67,10 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
             "board approval and publication to BiZZdesign Horizzon."
         ),
     )
-    wf = engine or build_default_engine()
+    settings = get_settings()
+    wf = engine or build_default_engine(settings)
+    if studio is None:
+        studio = StudioService(ViewProjectRepository(create_db_engine(settings.database_url)))
 
     def run(fn: Callable[[], T]) -> T:
         """Translate engine errors into HTTP errors (one load per call).
@@ -211,5 +233,22 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
     )
     def events(request_id: str) -> list[Event]:
         return run(lambda: wf.events_for(request_id))
+
+    @app.get("/ui-config", response_model=UiConfig, tags=["meta"], summary="Web UI settings")
+    def ui_config() -> UiConfig:
+        return UiConfig(
+            drawio_embed_url=settings.drawio_embed_url,
+            assistant_available=settings.assistant_configured or copilot_factory is not None,
+            version=archflow.__version__,
+        )
+
+    app.include_router(build_studio_router(studio, wf, settings, copilot_factory))
+
+    static_dir = resources.files("archflow.ui") / "static"
+    app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="ui")
+
+    @app.get("/", include_in_schema=False)
+    def index() -> RedirectResponse:
+        return RedirectResponse(url="/ui/")
 
     return app

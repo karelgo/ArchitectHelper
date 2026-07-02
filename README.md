@@ -58,6 +58,23 @@ that's the point: no more waiting for a weekly meeting to find out.
 Prefer HTTP? `archflow serve` starts a REST API with interactive docs at
 `http://127.0.0.1:8000/docs`.
 
+## Web UI: governance board + Studio
+
+`archflow serve` also hosts a web app at `http://127.0.0.1:8000/ui/`:
+
+- **Governance** — the pipeline as a kanban with a gate-aware request
+  drawer: advance stages, see exactly what blocks a gate, record triage,
+  stakeholders, reviews and decisions, browse artifacts and the audit
+  timeline.
+- **Studio** — an ArchiMate view designer with the **draw.io editor
+  embedded** (diagrams render with proper layer colours and relationship
+  notations; your layout edits sync back) and an **AI copilot** that builds
+  views from A to Z: describe the system, it models elements per layer,
+  wires semantically correct relationships and lays out the view live on
+  the canvas. Set `ARCHFLOW_ANTHROPIC_API_KEY` to enable the copilot.
+
+Details: [docs/studio.md](docs/studio.md).
+
 ## BiZZdesign Horizzon
 
 Configure your tenant in `.env` (see `.env.example`) and publication pushes
