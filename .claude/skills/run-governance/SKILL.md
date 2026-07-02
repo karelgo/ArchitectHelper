@@ -18,8 +18,9 @@ Work stage by stage; never skip a gate.
    document on entering drafting, Horizzon publication on entering
    publication). If it's **blocked**, the reasons tell you what work remains:
    - *triage*: agree classification (small/medium/large) and impacted domains
-     with the user, then `archflow complete <id> triage.classified` after
-     setting them.
+     with the user, then record them:
+     `archflow triage <id> --classification medium --domain CRM` (the
+     checklist items complete themselves once these are set).
    - *stakeholder analysis*: use the `stakeholder-analyst` agent, add missing
      stakeholders, then advance again.
    - *drafting*: review the generated PSA under `artifacts/<id>/psa.md`,

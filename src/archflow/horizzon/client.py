@@ -194,26 +194,31 @@ class HorizzonClient:
             "DELETE", f"/repositories/{repository_id}/collections/{collection_id}"
         )
 
+    def _bulk_post(self, path: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """POST items to a bulk endpoint in chunks, normalizing the response."""
+        created: list[dict[str, Any]] = []
+        for start in range(0, len(items), _BULK_CHUNK):
+            chunk = items[start : start + _BULK_CHUNK]
+            payload = self._request("POST", path, json=chunk).json()
+            if isinstance(payload, list):
+                created.extend(payload)
+            elif isinstance(payload, dict):
+                items_field = payload.get("_items")
+                created.extend(items_field if isinstance(items_field, list) else [payload])
+        return created
+
     def bulk_create_entities(
         self, repository_id: int, collection_id: str, entities: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         """Create entities in a collection, chunking to respect API limits."""
-        created: list[dict[str, Any]] = []
-        path = f"/repositories/{repository_id}/collections/{collection_id}/entities/bulk"
-        for start in range(0, len(entities), _BULK_CHUNK):
-            chunk = entities[start : start + _BULK_CHUNK]
-            payload = self._request("POST", path, json=chunk).json()
-            created.extend(payload.get("_items", payload) if isinstance(payload, dict) else payload)
-        return created
+        return self._bulk_post(
+            f"/repositories/{repository_id}/collections/{collection_id}/entities/bulk", entities
+        )
 
     def bulk_create_links(
         self, repository_id: int, collection_id: str, links: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         """Create links in a collection, chunking to respect API limits."""
-        created: list[dict[str, Any]] = []
-        path = f"/repositories/{repository_id}/collections/{collection_id}/links/bulk"
-        for start in range(0, len(links), _BULK_CHUNK):
-            chunk = links[start : start + _BULK_CHUNK]
-            payload = self._request("POST", path, json=chunk).json()
-            created.extend(payload.get("_items", payload) if isinstance(payload, dict) else payload)
-        return created
+        return self._bulk_post(
+            f"/repositories/{repository_id}/collections/{collection_id}/links/bulk", links
+        )

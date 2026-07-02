@@ -11,6 +11,7 @@ from archflow.domain.events import EventType
 from archflow.domain.models import (
     Artifact,
     ArtifactKind,
+    ChecklistItem,
     Classification,
     DecisionStatus,
     ReviewVerdict,
@@ -197,10 +198,29 @@ def test_reject_flow(engine: WorkflowEngine, event_log: EventLog) -> None:
     assert rejection.payload["reason"] == "Out of scope"
 
 
-def test_complete_item_and_unknown_key(engine: WorkflowEngine, event_log: EventLog) -> None:
+def test_complete_item_guards_and_custom_items(
+    engine: WorkflowEngine, event_log: EventLog
+) -> None:
     request = engine.create_request("Manual", description="d", requester="r")
-    updated = engine.complete_item(request.id, "triage.domains", actor="ea-team")
-    item = next(i for i in updated.checklist if i.key == "triage.domains")
+
+    # Auto-conditioned items cannot be completed by hand (gate bypass guard).
+    with pytest.raises(ValueError, match="automatically"):
+        engine.complete_item(request.id, "triage.domains", actor="mallory")
+
+    # Custom items belonging to a future stage are also out of reach.
+    request.checklist.append(
+        ChecklistItem(key="custom.later", description="Later sign-off", stage=Stage.TRIAGE)
+    )
+    request.checklist.append(
+        ChecklistItem(key="custom.now", description="Security sign-off", stage=Stage.INTAKE)
+    )
+    engine._repo.save(request)  # noqa: SLF001 - seeding custom items out-of-band
+    with pytest.raises(ValueError, match="stage"):
+        engine.complete_item(request.id, "custom.later", actor="ea-team")
+
+    # A custom item of the current stage completes fine and emits an event.
+    updated = engine.complete_item(request.id, "custom.now", actor="ea-team")
+    item = next(i for i in updated.checklist if i.key == "custom.now")
     assert item.done and item.completed_by == "ea-team"
     assert any(
         e.type == EventType.CHECKLIST_COMPLETED for e in event_log.for_request(request.id)
@@ -210,6 +230,47 @@ def test_complete_item_and_unknown_key(engine: WorkflowEngine, event_log: EventL
         engine.complete_item(request.id, "no.such.key", actor="ea-team")
 
 
+def test_set_triage_rejected_after_triage_stage(engine: WorkflowEngine) -> None:
+    """Reclassifying to small later must not bypass board approval."""
+    request = engine.create_request("Guarded", description="d", requester="r")
+    engine.set_triage(request.id, Classification.LARGE, ["hr"])  # fine at intake
+    engine.advance(request.id)  # -> triage
+    engine.advance(request.id)  # -> stakeholder_analysis
+    with pytest.raises(ValueError, match="[Tt]riage"):
+        engine.set_triage(request.id, Classification.SMALL)
+
+
 def test_unknown_request_id_raises(engine: WorkflowEngine) -> None:
     with pytest.raises(KeyError):
         engine.advance("missing-id")
+
+
+def test_on_exit_refreshes_stage_artifacts(tmp_path: Path) -> None:
+    """Artifacts regenerate when leaving a stage, so work added during the
+    stage (stakeholders, decisions) lands in the recorded deliverable."""
+    db = create_db_engine(f"sqlite:///{tmp_path}/exit.db")
+    settings = Settings(_env_file=None, artifacts_dir=tmp_path / "artifacts")
+    calls: list[str] = []
+
+    def tracker(label: str):
+        def action(ctx: AutomationContext) -> list[Artifact]:
+            calls.append(label)
+            return []
+
+        return action
+
+    registry = ActionRegistry()
+    registry.register(Stage.TRIAGE, tracker("enter:triage"))
+    registry.register_exit(Stage.TRIAGE, tracker("exit:triage"))
+    engine = WorkflowEngine(
+        repository=RequestRepository(db),
+        events=EventLog(db),
+        actions=registry,
+        settings=settings,
+    )
+    request = engine.create_request("Exit hooks", description="d", requester="r")
+    engine.advance(request.id)  # intake -> triage: on-enter fires
+    assert calls == ["enter:triage"]
+    engine.set_triage(request.id, Classification.SMALL, ["hr"])
+    engine.advance(request.id)  # triage -> stakeholder_analysis: on-exit fires
+    assert calls == ["enter:triage", "exit:triage"]

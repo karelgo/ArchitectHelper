@@ -99,6 +99,8 @@ def write_model(model: ArchimateModel) -> str:
             )
             if relationship.name:
                 _lang_text(rel_el, "name", relationship.name)
+            if relationship.documentation:
+                _lang_text(rel_el, "documentation", relationship.documentation)
 
     if property_ids:
         defs_el = ET.SubElement(root, _q("propertyDefinitions"))
@@ -197,6 +199,7 @@ def _read_relationships(root: ET.Element) -> list[Relationship]:
                 source=_read_id(rel_el.get("source", "")),
                 target=_read_id(rel_el.get("target", "")),
                 name=_text_of(rel_el, "name"),
+                documentation=_text_of(rel_el, "documentation"),
             )
         )
     return relationships
@@ -209,6 +212,9 @@ def _read_views(root: ET.Element) -> list[View]:
     if diagrams_el is None:
         return views
     for view_el in diagrams_el.findall(_q("view")):
+        # iter() walks all descendants: nested <node> children (visual
+        # containment, as written by Archi/Enterprise Studio) are flattened
+        # into the node list rather than silently dropped.
         nodes = [
             ViewNode(
                 id=_read_id(node_el.get("identifier", "")),
@@ -218,7 +224,7 @@ def _read_views(root: ET.Element) -> list[View]:
                 w=int(node_el.get("w", "0")),
                 h=int(node_el.get("h", "0")),
             )
-            for node_el in view_el.findall(_q("node"))
+            for node_el in view_el.iter(_q("node"))
         ]
         connections = [
             ViewConnection(
@@ -227,7 +233,7 @@ def _read_views(root: ET.Element) -> list[View]:
                 source_node=_read_id(conn_el.get("source", "")),
                 target_node=_read_id(conn_el.get("target", "")),
             )
-            for conn_el in view_el.findall(_q("connection"))
+            for conn_el in view_el.iter(_q("connection"))
         ]
         views.append(
             View(

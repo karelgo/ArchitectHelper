@@ -20,7 +20,7 @@ _CHECKLIST_SEED: dict[Stage, list[tuple[str, str]]] = {
         ("intake.described", "Title, description and requester are filled in"),
     ],
     Stage.TRIAGE: [
-        ("triage.classified", "Request is classified (small / medium / large)"),
+        ("triage.classified", "Request classification is set (small / medium / large)"),
         ("triage.domains", "At least one impacted domain is recorded"),
     ],
     Stage.STAKEHOLDER_ANALYSIS: [
@@ -47,6 +47,10 @@ _AUTO_CONDITIONS: dict[str, Callable[[ArchitectureRequest], bool]] = {
     "draft.decisions": lambda r: len(r.decisions) >= 1,
     "pub.published": lambda r: r.artifact_of_kind(ArtifactKind.ARCHIMATE_EXPORT) is not None,
 }
+
+#: Checklist keys whose completion is determined objectively by
+#: :func:`auto_complete` — they cannot be completed by hand.
+AUTO_KEYS: frozenset[str] = frozenset(_AUTO_CONDITIONS)
 
 
 def checklist_for(stage: Stage) -> list[ChecklistItem]:
@@ -97,15 +101,12 @@ def gate_for(request: ArchitectureRequest) -> tuple[bool, list[str]]:
     Returns ``(ok, reasons)`` where ``reasons`` lists human-readable blockers.
     """
     reasons: list[str] = []
+    # Triage conditions are fully covered by the checklist auto-conditions;
+    # only stages with rules the checklist cannot express get extra branches.
     for item in request.open_checklist(request.stage):
         reasons.append(f"Checklist item '{item.key}' not done: {item.description}")
 
-    if request.stage == Stage.TRIAGE:
-        if request.classification is None:
-            reasons.append("Request has no classification")
-        if not request.impacted_domains:
-            reasons.append("No impacted domains recorded")
-    elif request.stage == Stage.PEER_REVIEW:
+    if request.stage == Stage.PEER_REVIEW:
         reasons.extend(_peer_review_reasons(request))
     elif request.stage == Stage.BOARD_APPROVAL and not any(
         d.status == DecisionStatus.APPROVED for d in request.decisions

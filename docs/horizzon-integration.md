@@ -24,8 +24,10 @@ Consequences for ArchFlow's publication stage:
    and on Horizzon sites, without a publish step. Entities and links carry
    stable `externalId`s (`archflow-<request-id>-…`) so re-publishing is
    idempotent per request.
-2. **The stakeholder-map view always travels by file**: ArchFlow writes an
-   ArchiMate Open Exchange file (`artifacts/<request-id>/stakeholder_map.archimate.xml`)
+2. **The stakeholder-map view always travels by file**: at publication
+   ArchFlow writes an ArchiMate Open Exchange file
+   (`artifacts/<request-id>/publication_export.archimate.xml` — kept separate
+   from the immutable stakeholder-analysis artifact)
    that an architect imports in Enterprise Studio via
    *File → Import → ArchiMate Model Exchange File* (versions 2.1–3.2 are
    accepted). For fully automated view manipulation the only route is the

@@ -24,7 +24,19 @@ from archflow.domain.models import (
 )
 from archflow.storage.repository import EventLog, RequestRepository
 from archflow.workflow.actions import ActionRegistry, AutomationContext, default_registry
-from archflow.workflow.stages import auto_complete, checklist_for, gate_for
+from archflow.workflow.stages import AUTO_KEYS, auto_complete, checklist_for, gate_for
+
+
+def build_default_engine(settings: Settings | None = None) -> WorkflowEngine:
+    """Engine wired to the configured database — the one construction path
+    shared by the CLI and the REST API."""
+    settings = settings or get_settings()
+    from archflow.storage.db import create_db_engine
+
+    db = create_db_engine(settings.database_url)
+    return WorkflowEngine(
+        repository=RequestRepository(db), events=EventLog(db), settings=settings
+    )
 
 
 class AdvanceResult(BaseModel):
@@ -133,13 +145,17 @@ class WorkflowEngine:
                 advanced=False, from_stage=from_stage, reasons=["No next stage available"]
             )
 
-        request.stage = to_stage
-        request.touch()
-
         ctx = AutomationContext(
             request=request, settings=self._settings, artifacts_dir=self._settings.artifacts_dir
         )
-        generated = self._actions.on_enter(to_stage, ctx)
+        # Refresh the leaving stage's artifacts first, so the recorded
+        # deliverables include everything added during the stage.
+        generated = self._actions.on_exit(from_stage, ctx)
+
+        request.stage = to_stage
+        request.touch()
+
+        generated += self._actions.on_enter(to_stage, ctx)
         for artifact in generated:
             request.artifacts.append(artifact)
             self._emit(
@@ -180,11 +196,32 @@ class WorkflowEngine:
     # -- recording ----------------------------------------------------------
 
     def complete_item(self, request_id: str, key: str, actor: str) -> ArchitectureRequest:
-        """Manually mark one checklist item done."""
+        """Manually mark one checklist item done.
+
+        Only custom items can be completed by hand: items with an objective
+        auto-condition complete themselves when the condition is met, and
+        items of other stages are out of reach — both guards exist so the
+        stage gates cannot be bypassed.
+
+        Raises:
+            KeyError: If ``key`` is not on the request's checklist.
+            ValueError: If the item is auto-completed or belongs to a
+                different stage than the request is currently in.
+        """
         request = self._load(request_id)
         item = next((i for i in request.checklist if i.key == key), None)
         if item is None:
             raise KeyError(f"Unknown checklist key: {key!r}")
+        if key in AUTO_KEYS:
+            raise ValueError(
+                f"Checklist item {key!r} completes automatically when its condition "
+                "is met; it cannot be completed by hand."
+            )
+        if item.stage != request.stage:
+            raise ValueError(
+                f"Checklist item {key!r} belongs to stage '{item.stage.value}'; "
+                f"the request is in '{request.stage.value}'."
+            )
         item.done = True
         item.completed_by = actor
         item.completed_at = utcnow()
@@ -254,8 +291,21 @@ class WorkflowEngine:
         classification: Classification,
         impacted_domains: list[str] | None = None,
     ) -> ArchitectureRequest:
-        """Record the triage outcome: classification and impacted domains."""
+        """Record the triage outcome: classification and impacted domains.
+
+        Only allowed while the request is at intake or triage — reclassifying
+        later (e.g. to *small* after peer review) would silently change which
+        gates still apply.
+
+        Raises:
+            ValueError: If the request has already passed triage.
+        """
         request = self._load(request_id)
+        if request.stage not in (Stage.INTAKE, Stage.TRIAGE):
+            raise ValueError(
+                f"Triage can only be set at intake or triage; the request is in "
+                f"'{request.stage.value}'."
+            )
         request.classification = classification
         if impacted_domains:
             request.impacted_domains = impacted_domains
@@ -269,6 +319,10 @@ class WorkflowEngine:
     def get(self, request_id: str) -> ArchitectureRequest | None:
         """Load one request by id."""
         return self._repo.get(request_id)
+
+    def load(self, request_id: str) -> ArchitectureRequest:
+        """Load one request by id, raising ``KeyError`` when unknown."""
+        return self._load(request_id)
 
     def list_requests(self) -> list[ArchitectureRequest]:
         """All requests, most recently updated first."""

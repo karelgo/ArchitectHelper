@@ -25,22 +25,42 @@ Action = Callable[[AutomationContext], list[Artifact]]
 
 
 class ActionRegistry:
-    """Maps pipeline stages to automation actions run on stage entry."""
+    """Maps pipeline stages to automation actions.
+
+    *On-enter* actions produce a first version of a stage's artifacts the
+    moment the stage starts. *On-exit* actions run after the stage's gate has
+    passed, just before the transition — they regenerate artifacts so the
+    recorded deliverable reflects everything added *during* the stage
+    (stakeholders, decisions) instead of a stale entry-time snapshot.
+    """
 
     def __init__(self) -> None:
-        self._actions: dict[Stage, list[Action]] = {}
+        self._on_enter: dict[Stage, list[Action]] = {}
+        self._on_exit: dict[Stage, list[Action]] = {}
 
     def register(self, stage: Stage, fn: Action) -> None:
         """Register an action to run when a request enters ``stage``."""
-        self._actions.setdefault(stage, []).append(fn)
+        self._on_enter.setdefault(stage, []).append(fn)
+
+    def register_exit(self, stage: Stage, fn: Action) -> None:
+        """Register an action to run when a request leaves ``stage``."""
+        self._on_exit.setdefault(stage, []).append(fn)
 
     def on_enter(self, stage: Stage, ctx: AutomationContext) -> list[Artifact]:
-        """Run all actions for ``stage``, collecting the generated artifacts.
+        """Run all on-enter actions for ``stage``, collecting artifacts.
 
         Exceptions raised by actions propagate to the caller.
         """
+        return self._run(self._on_enter.get(stage, []), ctx)
+
+    def on_exit(self, stage: Stage, ctx: AutomationContext) -> list[Artifact]:
+        """Run all on-exit actions for ``stage``, collecting artifacts."""
+        return self._run(self._on_exit.get(stage, []), ctx)
+
+    @staticmethod
+    def _run(actions: list[Action], ctx: AutomationContext) -> list[Artifact]:
         artifacts: list[Artifact] = []
-        for fn in self._actions.get(stage, []):
+        for fn in actions:
             artifacts.extend(fn(ctx))
         return artifacts
 
@@ -102,9 +122,16 @@ def publish_action(ctx: AutomationContext) -> list[Artifact]:
 
 
 def default_registry() -> ActionRegistry:
-    """The standard wiring of automation actions to pipeline stages."""
+    """The standard wiring of automation actions to pipeline stages.
+
+    Map and PSA are generated on entry (an immediate draft to work with) and
+    regenerated on exit, so the artifact that travels to the next stage
+    reflects the stakeholders/decisions recorded during the stage.
+    """
     registry = ActionRegistry()
     registry.register(Stage.STAKEHOLDER_ANALYSIS, generate_stakeholder_map_action)
+    registry.register_exit(Stage.STAKEHOLDER_ANALYSIS, generate_stakeholder_map_action)
     registry.register(Stage.DRAFTING, generate_psa_action)
+    registry.register_exit(Stage.DRAFTING, generate_psa_action)
     registry.register(Stage.PUBLICATION, publish_action)
     return registry

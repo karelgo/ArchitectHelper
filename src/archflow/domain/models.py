@@ -214,9 +214,15 @@ class ArchitectureRequest(BaseModel):
         return items
 
     def artifact_of_kind(self, kind: ArtifactKind) -> Artifact | None:
-        """Most recent artifact of the given kind, if any."""
-        matches = [a for a in self.artifacts if a.kind == kind]
-        return max(matches, key=lambda a: a.created_at) if matches else None
+        """Most recent artifact of the given kind, if any.
+
+        Ties on ``created_at`` (clock resolution) resolve to the one added
+        last, since artifacts are appended in generation order.
+        """
+        matches = [(i, a) for i, a in enumerate(self.artifacts) if a.kind == kind]
+        if not matches:
+            return None
+        return max(matches, key=lambda pair: (pair[1].created_at, pair[0]))[1]
 
 
 def next_stage(request: ArchitectureRequest) -> Stage | None:

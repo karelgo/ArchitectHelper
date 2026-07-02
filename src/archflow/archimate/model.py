@@ -7,7 +7,7 @@ File Format 3.0 (see :mod:`archflow.archimate.openexchange`).
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from archflow.domain.models import new_id
 
@@ -108,6 +108,7 @@ class Relationship(BaseModel):
     source: str
     target: str
     name: str = ""
+    documentation: str = ""
 
 
 class ViewNode(BaseModel):
@@ -150,6 +151,11 @@ class ArchimateModel(BaseModel):
     relationships: list[Relationship] = Field(default_factory=list)
     views: list[View] = Field(default_factory=list)
 
+    _element_ids: set[str] = PrivateAttr(default_factory=set)
+
+    def model_post_init(self, __context: object) -> None:
+        self._element_ids = {element.id for element in self.elements}
+
     def add_element(
         self,
         type: str,
@@ -168,6 +174,7 @@ class ArchimateModel(BaseModel):
             type=type, name=name, documentation=documentation, properties=properties or {}
         )
         self.elements.append(element)
+        self._element_ids.add(element.id)
         return element
 
     def add_relationship(
@@ -181,10 +188,9 @@ class ArchimateModel(BaseModel):
         """
         if type not in RELATIONSHIP_TYPES:
             raise ValueError(f"Unknown ArchiMate relationship type: {type!r}")
-        known_ids = {element.id for element in self.elements}
-        if source not in known_ids:
+        if source not in self._element_ids:
             raise ValueError(f"Relationship source is not an element in this model: {source!r}")
-        if target not in known_ids:
+        if target not in self._element_ids:
             raise ValueError(f"Relationship target is not an element in this model: {target!r}")
         relationship = Relationship(type=type, source=source, target=target, name=name)
         self.relationships.append(relationship)

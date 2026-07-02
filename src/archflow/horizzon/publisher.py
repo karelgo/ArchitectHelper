@@ -73,7 +73,10 @@ class HorizzonPublisher:
     def _export_file(self, request: ArchitectureRequest, xml: str) -> Path:
         directory = self._settings.artifacts_dir / request.id
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / "stakeholder_map.archimate.xml"
+        # Distinct from the stakeholder-analysis artifact
+        # (stakeholder_map.archimate.xml): the reviewed map must stay
+        # immutable; this file is the publication-time snapshot.
+        path = directory / "publication_export.archimate.xml"
         path.write_text(xml, encoding="utf-8")
         return path
 

@@ -6,8 +6,9 @@ The stakeholder option syntax is ``"Name:Role:concern one|concern two"``
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, TypeVar
 
 import typer
 
@@ -19,8 +20,9 @@ from archflow.domain.models import (
     ReviewVerdict,
     Stakeholder,
 )
-from archflow.storage import EventLog, RequestRepository, create_db_engine
-from archflow.workflow.engine import WorkflowEngine
+from archflow.workflow.engine import WorkflowEngine, build_default_engine
+
+T = TypeVar("T")
 
 app = typer.Typer(
     name="archflow",
@@ -30,16 +32,23 @@ app = typer.Typer(
 
 
 def _engine() -> WorkflowEngine:
-    settings = get_settings()
-    db = create_db_engine(settings.database_url)
-    return WorkflowEngine(
-        repository=RequestRepository(db), events=EventLog(db), settings=settings
-    )
+    return build_default_engine()
 
 
 def _fail(message: str) -> None:
     typer.secho(message, fg=typer.colors.RED, err=True)
     raise typer.Exit(code=1)
+
+
+def _run(fn: Callable[[], T]) -> T:
+    """Call an engine operation, mapping expected errors to CLI failures."""
+    try:
+        return fn()
+    except KeyError as err:
+        _fail(err.args[0] if err.args else str(err))
+    except ValueError as err:
+        _fail(str(err))
+    raise AssertionError("unreachable")  # _fail always raises
 
 
 def parse_stakeholder(raw: str) -> Stakeholder:
@@ -126,10 +135,8 @@ def list_requests() -> None:
 @app.command()
 def show(request_id: str) -> None:
     """Show one request in detail."""
-    request = _engine().get(request_id)
-    if request is None:
-        _fail(f"Unknown request id: {request_id}")
-        return
+    engine = _engine()
+    request = _run(lambda: engine.load(request_id))
     _print_request(request)
 
 
@@ -140,9 +147,7 @@ def advance(
 ) -> None:
     """Advance the request to the next stage (or list what blocks it)."""
     engine = _engine()
-    if engine.get(request_id) is None:
-        _fail(f"Unknown request id: {request_id}")
-    result = engine.advance(request_id, actor=actor)
+    result = _run(lambda: engine.advance(request_id, actor=actor))
     if result.advanced:
         typer.secho(
             f"Advanced: {result.from_stage.value} -> {result.to_stage.value if result.to_stage else '?'}",
@@ -167,11 +172,23 @@ def triage(
 ) -> None:
     """Record the triage outcome (classification + impacted domains)."""
     engine = _engine()
-    if engine.get(request_id) is None:
-        _fail(f"Unknown request id: {request_id}")
-    request = engine.set_triage(request_id, classification, domain or None)
+    request = _run(lambda: engine.set_triage(request_id, classification, domain or None))
     typer.secho(f"Triage recorded: {classification.value}", fg=typer.colors.GREEN)
     _print_request(request)
+
+
+@app.command("add-stakeholder")
+def add_stakeholder(
+    request_id: str,
+    stakeholder: Annotated[
+        str, typer.Argument(help='Stakeholder as "Name:Role:concern1|concern2"')
+    ],
+) -> None:
+    """Add a stakeholder (typically during stakeholder analysis)."""
+    engine = _engine()
+    parsed = parse_stakeholder(stakeholder)
+    _run(lambda: engine.add_stakeholder(request_id, parsed))
+    typer.secho(f"Added stakeholder {parsed.name}", fg=typer.colors.GREEN)
 
 
 @app.command()
@@ -183,9 +200,7 @@ def review(
 ) -> None:
     """Record a peer-review verdict."""
     engine = _engine()
-    if engine.get(request_id) is None:
-        _fail(f"Unknown request id: {request_id}")
-    engine.record_review(request_id, reviewer=reviewer, verdict=verdict, comments=comments)
+    _run(lambda: engine.record_review(request_id, reviewer=reviewer, verdict=verdict, comments=comments))
     typer.secho(f"Review recorded: {reviewer} -> {verdict.value}", fg=typer.colors.GREEN)
 
 
@@ -201,10 +216,10 @@ def decide(
 ) -> None:
     """Record an architecture decision."""
     engine = _engine()
-    if engine.get(request_id) is None:
-        _fail(f"Unknown request id: {request_id}")
-    engine.record_decision(
-        request_id, title=title, rationale=rationale, status=status, decided_by=decided_by
+    _run(
+        lambda: engine.record_decision(
+            request_id, title=title, rationale=rationale, status=status, decided_by=decided_by
+        )
     )
     typer.secho(f"Decision recorded: [{status.value}] {title}", fg=typer.colors.GREEN)
 
@@ -212,17 +227,16 @@ def decide(
 @app.command()
 def complete(
     request_id: str,
-    key: Annotated[str, typer.Argument(help="Checklist item key, e.g. triage.classified")],
+    key: Annotated[str, typer.Argument(help="Checklist item key (custom items only)")],
     actor: Annotated[str, typer.Option(help="Who completed the item")] = "cli",
 ) -> None:
-    """Manually complete a checklist item."""
+    """Manually complete a custom checklist item.
+
+    Items with objective conditions (triage.classified, sa.map, ...) complete
+    themselves; this command refuses them so gates cannot be bypassed.
+    """
     engine = _engine()
-    if engine.get(request_id) is None:
-        _fail(f"Unknown request id: {request_id}")
-    try:
-        engine.complete_item(request_id, key, actor=actor)
-    except KeyError as err:
-        _fail(str(err))
+    _run(lambda: engine.complete_item(request_id, key, actor=actor))
     typer.secho(f"Completed checklist item {key}", fg=typer.colors.GREEN)
 
 
@@ -234,9 +248,7 @@ def reject(
 ) -> None:
     """Reject the request (terminal side-exit)."""
     engine = _engine()
-    if engine.get(request_id) is None:
-        _fail(f"Unknown request id: {request_id}")
-    engine.reject(request_id, actor=actor, reason=reason)
+    _run(lambda: engine.reject(request_id, actor=actor, reason=reason))
     typer.secho("Request rejected.", fg=typer.colors.YELLOW)
 
 
@@ -244,11 +256,7 @@ def reject(
 def events(request_id: str) -> None:
     """Show the audit trail for one request."""
     engine = _engine()
-    try:
-        trail = engine.events_for(request_id)
-    except KeyError:
-        _fail(f"Unknown request id: {request_id}")
-        return
+    trail = _run(lambda: engine.events_for(request_id))
     for event in trail:
         stamp = event.occurred_at.strftime("%Y-%m-%d %H:%M:%S")
         typer.echo(f"{stamp}  {event.type.value:<22} {event.actor:<12} {event.payload}")
@@ -259,14 +267,15 @@ def export_map(
     request_id: str,
     out: Annotated[Path | None, typer.Option(help="Output path for the exchange file")] = None,
 ) -> None:
-    """Export the stakeholder map as an ArchiMate Open Exchange file."""
+    """Export an ad-hoc stakeholder-map exchange file (not recorded as an artifact).
+
+    The governed artifact is generated automatically during the
+    stakeholder-analysis stage; this command is for one-off exports.
+    """
     from archflow.archimate.stakeholder_map import build_stakeholder_map
 
     engine = _engine()
-    request = engine.get(request_id)
-    if request is None:
-        _fail(f"Unknown request id: {request_id}")
-        return
+    request = _run(lambda: engine.load(request_id))
     model = build_stakeholder_map(request)
     path = out or Path(f"stakeholder_map_{request_id}.archimate.xml")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -285,10 +294,7 @@ def publish(
     from archflow.horizzon.publisher import HorizzonPublisher
 
     engine = _engine()
-    request = engine.get(request_id)
-    if request is None:
-        _fail(f"Unknown request id: {request_id}")
-        return
+    request = _run(lambda: engine.load(request_id))
     result = HorizzonPublisher(get_settings()).publish(request, repository_id=repository_id)
     color = typer.colors.GREEN if result.mode == "api" else typer.colors.YELLOW
     typer.secho(f"[{result.mode}] {result.detail}", fg=color)

@@ -40,8 +40,10 @@ scripts/verify.sh                        # ruff + mypy + pytest (run before comm
   elements, relationships, organizations, propertyDefinitions, views;
   identifiers are NCNames → prefix `id-`. Junctions are element types, not
   relationship types. Use stdlib `xml.etree`, never lxml.
-- Stage transitions only via `WorkflowEngine.advance` — never set
-  `request.stage` directly; gates and the event log depend on it.
+- Stage transitions only via the engine (`WorkflowEngine.advance` /
+  `reject`) — never set `request.stage` directly in application code; gates
+  and the event log depend on it. Checklist items with auto-conditions
+  cannot be completed by hand (gate-bypass guard).
 - `actions.py` imports archimate/horizzon **inside functions** — keep it that
   way so modules stay independently testable.
 - Config only via `archflow.config.Settings` (env prefix `ARCHFLOW_`,

@@ -8,6 +8,9 @@ temporary database and stub actions:
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import TypeVar
+
 from fastapi import FastAPI, HTTPException
 
 import archflow
@@ -19,24 +22,14 @@ from archflow.api.schemas import (
     RejectIn,
     RequestCreate,
     ReviewIn,
+    StakeholderIn,
     TriageIn,
 )
-from archflow.config import get_settings
 from archflow.domain.events import Event
 from archflow.domain.models import ArchitectureRequest, Stakeholder
-from archflow.storage import EventLog, RequestRepository, create_db_engine
-from archflow.workflow.engine import AdvanceResult, WorkflowEngine
+from archflow.workflow.engine import AdvanceResult, WorkflowEngine, build_default_engine
 
-
-def default_engine() -> WorkflowEngine:
-    """Engine wired to the configured database (used outside tests)."""
-    settings = get_settings()
-    db = create_db_engine(settings.database_url)
-    return WorkflowEngine(
-        repository=RequestRepository(db),
-        events=EventLog(db),
-        settings=settings,
-    )
+T = TypeVar("T")
 
 
 def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
@@ -50,13 +43,17 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
             "board approval and publication to BiZZdesign Horizzon."
         ),
     )
-    wf = engine or default_engine()
+    wf = engine or build_default_engine()
 
-    def load(request_id: str) -> ArchitectureRequest:
-        request = wf.get(request_id)
-        if request is None:
-            raise HTTPException(status_code=404, detail=f"Unknown request id: {request_id}")
-        return request
+    def run(fn: Callable[[], T]) -> T:
+        """Translate engine errors into HTTP errors (one load per call)."""
+        try:
+            return fn()
+        except KeyError as err:
+            detail = err.args[0] if err.args else str(err)
+            raise HTTPException(status_code=404, detail=detail) from err
+        except ValueError as err:
+            raise HTTPException(status_code=409, detail=str(err)) from err
 
     @app.get("/health", response_model=HealthOut, tags=["meta"], summary="Liveness probe")
     def health() -> HealthOut:
@@ -95,7 +92,10 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
         summary="Fetch one request",
     )
     def get_request(request_id: str) -> ArchitectureRequest:
-        return load(request_id)
+        request = wf.get(request_id)
+        if request is None:
+            raise HTTPException(status_code=404, detail=f"Unknown request id: {request_id}")
+        return request
 
     @app.post(
         "/requests/{request_id}/advance",
@@ -104,13 +104,12 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
         summary="Try to advance the request to the next stage",
         description=(
             "Runs the current stage's gate. Either the request moves on (and "
-            "on-enter automation generates artifacts) or the response lists "
+            "automation refreshes/generates artifacts) or the response lists "
             "the reasons it is blocked."
         ),
     )
     def advance(request_id: str, payload: AdvanceIn | None = None) -> AdvanceResult:
-        load(request_id)
-        return wf.advance(request_id, actor=(payload.actor if payload else "api"))
+        return run(lambda: wf.advance(request_id, actor=(payload.actor if payload else "api")))
 
     @app.post(
         "/requests/{request_id}/triage",
@@ -119,11 +118,23 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
         summary="Record the triage outcome (classification + impacted domains)",
     )
     def triage(request_id: str, payload: TriageIn) -> ArchitectureRequest:
-        load(request_id)
-        return wf.set_triage(
-            request_id,
-            classification=payload.classification,
-            impacted_domains=payload.impacted_domains or None,
+        return run(
+            lambda: wf.set_triage(
+                request_id,
+                classification=payload.classification,
+                impacted_domains=payload.impacted_domains or None,
+            )
+        )
+
+    @app.post(
+        "/requests/{request_id}/stakeholders",
+        response_model=ArchitectureRequest,
+        tags=["workflow"],
+        summary="Add a stakeholder (typically during stakeholder analysis)",
+    )
+    def add_stakeholder(request_id: str, payload: StakeholderIn) -> ArchitectureRequest:
+        return run(
+            lambda: wf.add_stakeholder(request_id, Stakeholder(**payload.model_dump()))
         )
 
     @app.post(
@@ -133,12 +144,13 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
         summary="Record a peer-review verdict",
     )
     def record_review(request_id: str, payload: ReviewIn) -> ArchitectureRequest:
-        load(request_id)
-        return wf.record_review(
-            request_id,
-            reviewer=payload.reviewer,
-            verdict=payload.verdict,
-            comments=payload.comments,
+        return run(
+            lambda: wf.record_review(
+                request_id,
+                reviewer=payload.reviewer,
+                verdict=payload.verdict,
+                comments=payload.comments,
+            )
         )
 
     @app.post(
@@ -148,29 +160,32 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
         summary="Record an architecture decision",
     )
     def record_decision(request_id: str, payload: DecisionIn) -> ArchitectureRequest:
-        load(request_id)
-        return wf.record_decision(
-            request_id,
-            title=payload.title,
-            rationale=payload.rationale,
-            status=payload.status,
-            decided_by=payload.decided_by,
+        return run(
+            lambda: wf.record_decision(
+                request_id,
+                title=payload.title,
+                rationale=payload.rationale,
+                status=payload.status,
+                decided_by=payload.decided_by,
+            )
         )
 
     @app.post(
         "/requests/{request_id}/checklist/{key}/complete",
         response_model=ArchitectureRequest,
         tags=["workflow"],
-        summary="Manually complete a checklist item",
+        summary="Manually complete a custom checklist item",
+        description=(
+            "Only custom items can be completed by hand: auto-conditioned "
+            "items complete themselves (409), unknown keys are 404."
+        ),
     )
     def complete_item(
         request_id: str, key: str, payload: CompleteIn | None = None
     ) -> ArchitectureRequest:
-        load(request_id)
-        try:
-            return wf.complete_item(request_id, key, actor=(payload.actor if payload else "api"))
-        except KeyError as err:
-            raise HTTPException(status_code=404, detail=str(err)) from err
+        return run(
+            lambda: wf.complete_item(request_id, key, actor=(payload.actor if payload else "api"))
+        )
 
     @app.post(
         "/requests/{request_id}/reject",
@@ -179,8 +194,7 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
         summary="Reject the request (terminal)",
     )
     def reject(request_id: str, payload: RejectIn) -> ArchitectureRequest:
-        load(request_id)
-        return wf.reject(request_id, actor=payload.actor, reason=payload.reason)
+        return run(lambda: wf.reject(request_id, actor=payload.actor, reason=payload.reason))
 
     @app.get(
         "/requests/{request_id}/events",
@@ -189,7 +203,6 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
         summary="Audit trail for one request, oldest first",
     )
     def events(request_id: str) -> list[Event]:
-        load(request_id)
-        return wf.events_for(request_id)
+        return run(lambda: wf.events_for(request_id))
 
     return app
