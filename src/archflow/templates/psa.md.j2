@@ -32,7 +32,7 @@ _No impacted domains recorded._
 | Name | Role | Influence | Interest | Attitude | Concerns |
 | --- | --- | --- | --- | --- | --- |
 {% for s in request.stakeholders %}
-| {{ s.name }} | {{ s.role or "—" }} | {{ s.influence.value }} | {{ s.interest.value }} | {{ s.attitude.value }} | {{ s.concerns | join("; ") or "—" }} |
+| {{ s.name | md_cell }} | {{ (s.role or "—") | md_cell }} | {{ s.influence.value }} | {{ s.interest.value }} | {{ s.attitude.value }} | {{ (s.concerns | join("; ") or "—") | md_cell }} |
 {% endfor %}
 {% else %}
 _No stakeholders recorded._
@@ -77,7 +77,7 @@ _No goals recorded._
 | Title | Status | Rationale | Decided by |
 | --- | --- | --- | --- |
 {% for d in request.decisions %}
-| {{ d.title }} | {{ d.status.value }} | {{ d.rationale or "—" }} | {{ d.decided_by or "—" }} |
+| {{ d.title | md_cell }} | {{ d.status.value }} | {{ (d.rationale or "—") | md_cell }} | {{ (d.decided_by or "—") | md_cell }} |
 {% endfor %}
 {% else %}
 _No decisions recorded._

@@ -164,7 +164,12 @@ class DecisionStatus(StrEnum):
 
 
 class Decision(BaseModel):
-    """An architecture decision recorded against the request (ADR-style)."""
+    """An architecture decision recorded against the request (ADR-style).
+
+    ``stage`` records where in the pipeline the decision was made — the
+    board-approval gate only counts approvals recorded *at* board approval,
+    so an early "approved" decision cannot pre-satisfy the gate.
+    """
 
     id: str = Field(default_factory=new_id)
     title: str
@@ -172,6 +177,7 @@ class Decision(BaseModel):
     status: DecisionStatus = DecisionStatus.PROPOSED
     decided_by: str = ""
     decided_at: datetime | None = None
+    stage: Stage | None = None
 
 
 class ArchitectureRequest(BaseModel):

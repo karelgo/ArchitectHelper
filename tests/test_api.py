@@ -187,3 +187,36 @@ def test_reject_and_checklist_endpoints(client: TestClient) -> None:
     result = client.post(f"/requests/{request_id}/advance", json={}).json()
     assert not result["advanced"]
     assert "terminal" in result["reasons"][0]
+
+
+def test_add_stakeholder_endpoint_and_stage_guard(client: TestClient) -> None:
+    request_id = create_request(client)
+
+    response = client.post(
+        f"/requests/{request_id}/stakeholders",
+        json={"name": "Bob", "role": "CISO", "concerns": ["Data protection"]},
+    )
+    assert response.status_code == 200
+    assert any(s["name"] == "Bob" for s in response.json()["stakeholders"])
+
+    assert client.post("/requests/nope/stakeholders", json={"name": "X"}).status_code == 404
+
+    # Walk past stakeholder analysis, then adding is refused with 409.
+    client.post(f"/requests/{request_id}/advance", json={})
+    client.post(
+        f"/requests/{request_id}/triage",
+        json={"classification": "small", "impacted_domains": ["CRM"]},
+    )
+    client.post(f"/requests/{request_id}/advance", json={})  # -> stakeholder_analysis
+    client.post(f"/requests/{request_id}/advance", json={})  # -> drafting
+    response = client.post(f"/requests/{request_id}/stakeholders", json={"name": "Late"})
+    assert response.status_code == 409
+
+
+def test_auto_completed_checklist_item_is_409_not_404(client: TestClient) -> None:
+    request_id = create_request(client)
+    response = client.post(
+        f"/requests/{request_id}/checklist/triage.classified/complete", json={"actor": "t"}
+    )
+    assert response.status_code == 409
+    assert "automatically" in response.json()["detail"]

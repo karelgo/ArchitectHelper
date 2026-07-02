@@ -174,10 +174,27 @@ def test_gate_board_approval_needs_approved_decision() -> None:
     request.stage = Stage.BOARD_APPROVAL
     ok, reasons = gate_for(request)
     assert not ok
-    assert any("approved decision" in reason.lower() for reason in reasons)
+    assert any("board-approval stage" in reason.lower() for reason in reasons)
+
+    # An approval recorded at an earlier stage must not satisfy the gate.
+    request.decisions.append(
+        Decision(
+            title="Premature",
+            status=DecisionStatus.APPROVED,
+            decided_by="mallory",
+            stage=Stage.DRAFTING,
+        )
+    )
+    ok, _ = gate_for(request)
+    assert not ok
 
     request.decisions.append(
-        Decision(title="Go ahead", status=DecisionStatus.APPROVED, decided_by="board")
+        Decision(
+            title="Go ahead",
+            status=DecisionStatus.APPROVED,
+            decided_by="board",
+            stage=Stage.BOARD_APPROVAL,
+        )
     )
     ok, _ = gate_for(request)
     assert ok

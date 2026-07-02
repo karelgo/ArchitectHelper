@@ -6,7 +6,7 @@ _Request `{{ request.id }}` — generated {{ generated_at.strftime("%Y-%m-%d") }
 | Title | Status | Rationale | Decided by |
 | --- | --- | --- | --- |
 {% for d in request.decisions %}
-| {{ d.title }} | {{ d.status.value }} | {{ d.rationale or "—" }} | {{ d.decided_by or "—" }} |
+| {{ d.title | md_cell }} | {{ d.status.value }} | {{ (d.rationale or "—") | md_cell }} | {{ (d.decided_by or "—") | md_cell }} |
 {% endfor %}
 {% else %}
 _No decisions recorded._

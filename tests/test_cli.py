@@ -160,3 +160,21 @@ def test_reject_flow() -> None:
     assert result.exit_code == 0
     result = runner.invoke(app, ["show", request_id])
     assert "rejected" in result.output
+
+
+def test_add_stakeholder_command() -> None:
+    request_id = create_request()
+    result = runner.invoke(app, ["add-stakeholder", request_id, "Carol:Architect:coherence"])
+    assert result.exit_code == 0, result.output
+    shown = runner.invoke(app, ["show", request_id])
+    assert "Carol" in shown.output
+
+
+def test_manual_publish_lands_on_audit_trail() -> None:
+    request_id = create_request()
+    result = runner.invoke(app, ["publish", request_id])
+    assert result.exit_code == 0, result.output
+    events = runner.invoke(app, ["events", request_id])
+    assert "artifact_generated" in events.output
+    shown = runner.invoke(app, ["show", request_id])
+    assert "archimate_export" in shown.output

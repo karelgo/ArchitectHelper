@@ -79,3 +79,18 @@ def test_render_decision_log() -> None:
 def test_render_decision_log_empty() -> None:
     output = render_decision_log(ArchitectureRequest(title="Empty"))
     assert "No decisions recorded" in output
+
+
+def test_markdown_table_cells_escape_pipes_and_newlines() -> None:
+    from archflow.domain.models import ArchitectureRequest, Stakeholder
+
+    request = ArchitectureRequest(
+        title="Esc",
+        description="d",
+        requester="r",
+        stakeholders=[
+            Stakeholder(name="Alice", role="CIO", concerns=["Cost | budget\nrisk"])
+        ],
+    )
+    rendered = render_psa(request)
+    assert "Cost \\| budget risk" in rendered

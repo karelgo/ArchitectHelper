@@ -8,10 +8,12 @@ elements and lays them out in a single deterministic diagram view.
 from __future__ import annotations
 
 from archflow.archimate.model import ArchimateModel, Element, ViewConnection, ViewNode
-from archflow.domain.models import ArchitectureRequest
+from archflow.domain.models import ArchitectureRequest, Stakeholder
 
-#: Diagram column per element type (left to right).
+#: Diagram column per element type (left to right); unknown types get their
+#: own trailing column instead of silently sharing the last one.
 _COLUMNS: dict[str, int] = {"Stakeholder": 0, "Driver": 1, "Assessment": 2, "Goal": 3}
+_OVERFLOW_COLUMN = len(_COLUMNS)
 
 _COLUMN_X_START = 40
 _COLUMN_X_STEP = 260
@@ -19,6 +21,11 @@ _ROW_Y_START = 40
 _ROW_Y_STEP = 90
 _NODE_W = 200
 _NODE_H = 60
+
+
+def _key(name: str) -> str:
+    """Normalization for name matching: whitespace- and case-insensitive."""
+    return name.strip().casefold()
 
 
 def build_stakeholder_map(request: ArchitectureRequest) -> ArchimateModel:
@@ -32,7 +39,10 @@ def build_stakeholder_map(request: ArchitectureRequest) -> ArchimateModel:
     """
     model = ArchimateModel(name=request.title, documentation=request.description)
 
-    stakeholders_by_key: dict[str, Element] = {}
+    # Every stakeholder gets its own element, even under duplicate names;
+    # name-based lookups resolve to ALL matching stakeholders.
+    stakeholder_pairs: list[tuple[Stakeholder, Element]] = []
+    stakeholders_by_key: dict[str, list[Element]] = {}
     for stakeholder in request.stakeholders:
         element = model.add_element(
             "Stakeholder",
@@ -44,7 +54,8 @@ def build_stakeholder_map(request: ArchitectureRequest) -> ArchimateModel:
                 "attitude": stakeholder.attitude.value,
             },
         )
-        stakeholders_by_key.setdefault(stakeholder.name.casefold(), element)
+        stakeholder_pairs.append((stakeholder, element))
+        stakeholders_by_key.setdefault(_key(stakeholder.name), []).append(element)
 
     seen_associations: set[tuple[str, str]] = set()
 
@@ -55,34 +66,32 @@ def build_stakeholder_map(request: ArchitectureRequest) -> ArchimateModel:
         seen_associations.add((source_id, target_id))
         model.add_relationship("Association", source_id, target_id)
 
-    def associate_stakeholder(stakeholder_name: str, target_id: str) -> None:
-        """Associate a stakeholder (looked up by name, case-insensitively) to a target."""
-        found = stakeholders_by_key.get(stakeholder_name.casefold())
-        if found is not None:
-            associate(found.id, target_id)
+    def associate_stakeholders(stakeholder_name: str, target_id: str) -> None:
+        """Associate every stakeholder matching the name to the target."""
+        for element in stakeholders_by_key.get(_key(stakeholder_name), []):
+            associate(element.id, target_id)
 
     # Concerns -> Driver elements, deduplicated case-insensitively
     # (first-seen casing wins), associated from each holding stakeholder.
     drivers_by_key: dict[str, Element] = {}
-    for stakeholder in request.stakeholders:
-        stakeholder_el = stakeholders_by_key[stakeholder.name.casefold()]
+    for stakeholder, stakeholder_el in stakeholder_pairs:
         for concern in stakeholder.concerns:
-            key = concern.casefold()
+            key = _key(concern)
             driver_el = drivers_by_key.get(key)
             if driver_el is None:
-                driver_el = model.add_element("Driver", concern)
+                driver_el = model.add_element("Driver", concern.strip())
                 drivers_by_key[key] = driver_el
             associate(stakeholder_el.id, driver_el.id)
 
     # Explicit drivers, deduplicated against concern-derived drivers.
     for driver in request.drivers:
-        key = driver.name.casefold()
+        key = _key(driver.name)
         driver_el = drivers_by_key.get(key)
         if driver_el is None:
             driver_el = model.add_element("Driver", driver.name, documentation=driver.description)
             drivers_by_key[key] = driver_el
         for name in driver.stakeholder_names:
-            associate_stakeholder(name, driver_el.id)
+            associate_stakeholders(name, driver_el.id)
 
     assessment_elements: list[Element] = []
     for assessment in request.assessments:
@@ -90,28 +99,33 @@ def build_stakeholder_map(request: ArchitectureRequest) -> ArchimateModel:
             "Assessment", assessment.name, documentation=assessment.description
         )
         assessment_elements.append(assessment_el)
-        driver_el = drivers_by_key.get(assessment.driver_name.casefold())
+        driver_el = drivers_by_key.get(_key(assessment.driver_name))
         if assessment.driver_name and driver_el is not None:
             associate(assessment_el.id, driver_el.id)
 
     goals_by_key: dict[str, Element] = {}
     for goal in request.goals:
         goal_el = model.add_element("Goal", goal.name, documentation=goal.description)
-        goals_by_key.setdefault(goal.name.casefold(), goal_el)
+        goals_by_key.setdefault(_key(goal.name), goal_el)
         for name in goal.stakeholder_names:
-            associate_stakeholder(name, goal_el.id)
+            associate_stakeholders(name, goal_el.id)
 
     business_goal_el: Element | None = None
     if request.business_goal:
-        key = request.business_goal.casefold()
+        key = _key(request.business_goal)
         business_goal_el = goals_by_key.get(key)
         if business_goal_el is None:
             business_goal_el = model.add_element("Goal", request.business_goal)
             goals_by_key[key] = business_goal_el
 
-    if business_goal_el is not None:
-        for assessment_el in assessment_elements:
-            model.add_relationship("Influence", assessment_el.id, business_goal_el.id)
+    # Assessments influence the business goal when one exists; otherwise the
+    # motivation chain still connects — they influence every explicit goal.
+    influence_targets = (
+        [business_goal_el] if business_goal_el is not None else list(goals_by_key.values())
+    )
+    for assessment_el in assessment_elements:
+        for goal_el in influence_targets:
+            model.add_relationship("Influence", assessment_el.id, goal_el.id)
 
     _layout_view(model, f"Stakeholder Map — {request.title}")
     return model
@@ -121,9 +135,9 @@ def _layout_view(model: ArchimateModel, view_name: str) -> None:
     """Add one view with a node per element and a connection per relationship."""
     view = model.add_view(view_name)
     node_id_by_element: dict[str, str] = {}
-    rows_used = [0, 0, 0, 0]
+    rows_used = [0] * (_OVERFLOW_COLUMN + 1)
     for element in model.elements:
-        column = _COLUMNS.get(element.type, len(rows_used) - 1)
+        column = _COLUMNS.get(element.type, _OVERFLOW_COLUMN)
         row = rows_used[column]
         rows_used[column] += 1
         node = ViewNode(

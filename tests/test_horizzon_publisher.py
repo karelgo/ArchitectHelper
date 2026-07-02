@@ -65,6 +65,8 @@ def test_configured_pushes_collection_entities_and_links(tmp_path: Path) -> None
             return httpx.Response(200, json={"access_token": "jwt", "expires_in": 600})
         if path == "/api/3.0/repositories":
             return httpx.Response(200, json={"_items": [{"id": 7, "name": "Main"}]})
+        if path == "/api/3.0/repositories/7/collections" and http_request.method == "GET":
+            return httpx.Response(200, json={"_items": []})
         if path == "/api/3.0/repositories/7/collections":
             captured["collection"] = json.loads(http_request.content)
             return httpx.Response(200, json={"id": "col-1"})
@@ -136,3 +138,49 @@ def test_explicit_repository_id_skips_lookup(tmp_path: Path) -> None:
     assert result.mode == "api"
     assert "/api/3.0/repositories" not in paths  # no repository listing
     assert any(p == "/api/3.0/repositories/42/collections" for p in paths)
+
+
+def test_republish_replaces_existing_collection(tmp_path: Path) -> None:
+    """Second publish of the same request deletes the prior collection first."""
+    request = make_request()
+    settings = configured_settings(tmp_path)
+    deleted: list[str] = []
+    entity_ids: list[set[str]] = [set(), set()]
+    publish_round = {"n": 0}
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        path = http_request.url.path
+        if path == "/oauth/token":
+            return httpx.Response(200, json={"access_token": "jwt", "expires_in": 600})
+        if path == "/api/3.0/repositories":
+            return httpx.Response(200, json={"_items": [{"id": 7}]})
+        if path == "/api/3.0/repositories/7/collections" and http_request.method == "GET":
+            if publish_round["n"] == 0:
+                return httpx.Response(200, json={"_items": []})
+            return httpx.Response(
+                200,
+                json={"_items": [{"id": "col-old", "externalId": f"archflow-{request.id}"}]},
+            )
+        if path == "/api/3.0/repositories/7/collections/col-old" and http_request.method == "DELETE":
+            deleted.append("col-old")
+            return httpx.Response(204)
+        if path == "/api/3.0/repositories/7/collections":
+            return httpx.Response(200, json={"id": f"col-{publish_round['n']}"})
+        if path.endswith("/entities/bulk"):
+            chunk = json.loads(http_request.content)
+            entity_ids[publish_round["n"]].update(e["externalId"] for e in chunk)
+            return httpx.Response(200, json={"_items": chunk})
+        if path.endswith("/links/bulk"):
+            return httpx.Response(200, json={"_items": []})
+        raise AssertionError(f"Unexpected call: {http_request.method} {path}")
+
+    client = HorizzonClient(settings, transport=httpx.MockTransport(handler), sleep=lambda s: None)
+    publisher = HorizzonPublisher(settings, client=client)
+
+    assert publisher.publish(request).mode == "api"
+    publish_round["n"] = 1
+    assert publisher.publish(request).mode == "api"
+
+    assert deleted == ["col-old"], "prior collection must be replaced"
+    # externalIds derive from type+name, so re-publishing is idempotent.
+    assert entity_ids[0] == entity_ids[1]

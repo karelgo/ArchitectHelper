@@ -106,11 +106,22 @@ def gate_for(request: ArchitectureRequest) -> tuple[bool, list[str]]:
     for item in request.open_checklist(request.stage):
         reasons.append(f"Checklist item '{item.key}' not done: {item.description}")
 
+    # Defense in depth: a request whose checklist is missing this stage's
+    # seeded items (constructed outside create_request, partial data) must
+    # not sail through on an accidentally empty list.
+    seeded_keys = {key for key, _ in _CHECKLIST_SEED.get(request.stage, [])}
+    present_keys = {i.key for i in request.checklist if i.stage == request.stage}
+    for missing in sorted(seeded_keys - present_keys):
+        reasons.append(f"Checklist item '{missing}' is missing from this request")
+
     if request.stage == Stage.PEER_REVIEW:
         reasons.extend(_peer_review_reasons(request))
     elif request.stage == Stage.BOARD_APPROVAL and not any(
-        d.status == DecisionStatus.APPROVED for d in request.decisions
+        d.status == DecisionStatus.APPROVED and d.stage == Stage.BOARD_APPROVAL
+        for d in request.decisions
     ):
-        reasons.append("Board approval requires at least one approved decision")
+        reasons.append(
+            "Board approval requires a decision approved at the board-approval stage"
+        )
 
     return (not reasons, reasons)

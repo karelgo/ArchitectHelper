@@ -20,7 +20,7 @@ from archflow.domain.models import (
     ReviewVerdict,
     Stakeholder,
 )
-from archflow.workflow.engine import WorkflowEngine, build_default_engine
+from archflow.workflow.engine import GuardViolation, WorkflowEngine, build_default_engine
 
 T = TypeVar("T")
 
@@ -41,12 +41,16 @@ def _fail(message: str) -> None:
 
 
 def _run(fn: Callable[[], T]) -> T:
-    """Call an engine operation, mapping expected errors to CLI failures."""
+    """Call an engine operation, mapping *expected* errors to CLI failures.
+
+    Unknown ids and guard refusals become friendly messages; anything else
+    (internal defects) propagates with a traceback so it gets noticed.
+    """
     try:
         return fn()
     except KeyError as err:
         _fail(err.args[0] if err.args else str(err))
-    except ValueError as err:
+    except GuardViolation as err:
         _fail(str(err))
     raise AssertionError("unreachable")  # _fail always raises
 
@@ -291,11 +295,20 @@ def publish(
     ] = None,
 ) -> None:
     """Publish the stakeholder map to Horizzon (or export the exchange file)."""
+    from archflow.domain.models import Artifact, ArtifactKind
     from archflow.horizzon.publisher import HorizzonPublisher
 
     engine = _engine()
     request = _run(lambda: engine.load(request_id))
     result = HorizzonPublisher(get_settings()).publish(request, repository_id=repository_id)
+    if result.artifact_path:
+        # Manual publishes stay on the audit trail like automated ones.
+        artifact = Artifact(
+            kind=ArtifactKind.ARCHIMATE_EXPORT,
+            name=f"ArchiMate export ({result.mode}, manual publish)",
+            path=str(result.artifact_path),
+        )
+        _run(lambda: engine.record_artifact(request_id, artifact, actor="cli"))
     color = typer.colors.GREEN if result.mode == "api" else typer.colors.YELLOW
     typer.secho(f"[{result.mode}] {result.detail}", fg=color)
 

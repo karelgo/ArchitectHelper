@@ -19,6 +19,7 @@ class EventType(StrEnum):
     REQUEST_CREATED = "request_created"
     STAGE_ENTERED = "stage_entered"
     STAGE_BLOCKED = "stage_blocked"
+    STAKEHOLDER_ADDED = "stakeholder_added"
     CHECKLIST_COMPLETED = "checklist_completed"
     ARTIFACT_GENERATED = "artifact_generated"
     REVIEW_RECORDED = "review_recorded"

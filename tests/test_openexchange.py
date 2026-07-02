@@ -125,3 +125,15 @@ def test_empty_model_round_trip() -> None:
     model = ArchimateModel(name="Empty")
     restored = read_model(write_model(model))
     assert restored.model_dump() == model.model_dump()
+
+
+def test_control_characters_are_stripped_on_write() -> None:
+    """XML-1.0-illegal control chars must not reach the exchange file."""
+    from archflow.archimate.model import ArchimateModel
+
+    model = ArchimateModel(name="Ctl")
+    model.add_element("Goal", "Pasted\x0bname", documentation="doc\x1ftext")
+    xml = write_model(model)
+    assert "\x0b" not in xml and "\x1f" not in xml
+    parsed = read_model(xml)
+    assert parsed.elements[0].name == "Pastedname"

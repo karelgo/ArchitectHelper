@@ -9,15 +9,26 @@ from jinja2 import Environment, PackageLoader
 from archflow.domain.models import ArchitectureRequest, utcnow
 
 
+def md_cell(value: object) -> str:
+    """Escape a value for use inside a markdown table cell.
+
+    Pipes and newlines in user-supplied text (concerns, rationales) would
+    otherwise split the table.
+    """
+    return str(value).replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
 @lru_cache(maxsize=1)
 def _environment() -> Environment:
     """Jinja environment loading templates from the installed package."""
-    return Environment(
+    env = Environment(
         loader=PackageLoader("archflow", "templates"),
         autoescape=False,
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    env.filters["md_cell"] = md_cell
+    return env
 
 
 def render_psa(request: ArchitectureRequest) -> str:

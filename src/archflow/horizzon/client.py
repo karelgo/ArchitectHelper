@@ -177,6 +177,13 @@ class HorizzonClient:
 
     # -- writes (architecture automation external data) -------------------------
 
+    def list_collections(self, repository_id: int) -> list[dict[str, Any]]:
+        """Externally-managed collections in the model package."""
+        payload = self._request("GET", f"/repositories/{repository_id}/collections").json()
+        if isinstance(payload, dict):
+            return list(payload.get("_items", []))
+        return list(payload)
+
     def create_collection(
         self, repository_id: int, name: str, *, external_id: str | None = None
     ) -> dict[str, Any]:

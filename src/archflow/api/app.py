@@ -27,7 +27,12 @@ from archflow.api.schemas import (
 )
 from archflow.domain.events import Event
 from archflow.domain.models import ArchitectureRequest, Stakeholder
-from archflow.workflow.engine import AdvanceResult, WorkflowEngine, build_default_engine
+from archflow.workflow.engine import (
+    AdvanceResult,
+    GuardViolation,
+    WorkflowEngine,
+    build_default_engine,
+)
 
 T = TypeVar("T")
 
@@ -46,13 +51,18 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
     wf = engine or build_default_engine()
 
     def run(fn: Callable[[], T]) -> T:
-        """Translate engine errors into HTTP errors (one load per call)."""
+        """Translate engine errors into HTTP errors (one load per call).
+
+        Only *expected* errors map to 4xx: unknown ids (404) and guard
+        refusals (409). Anything else — including internal ValueErrors from
+        model generation — propagates as a 500 so defects stay visible.
+        """
         try:
             return fn()
         except KeyError as err:
             detail = err.args[0] if err.args else str(err)
             raise HTTPException(status_code=404, detail=detail) from err
-        except ValueError as err:
+        except GuardViolation as err:
             raise HTTPException(status_code=409, detail=str(err)) from err
 
     @app.get("/health", response_model=HealthOut, tags=["meta"], summary="Liveness probe")
@@ -92,10 +102,7 @@ def create_app(engine: WorkflowEngine | None = None) -> FastAPI:
         summary="Fetch one request",
     )
     def get_request(request_id: str) -> ArchitectureRequest:
-        request = wf.get(request_id)
-        if request is None:
-            raise HTTPException(status_code=404, detail=f"Unknown request id: {request_id}")
-        return request
+        return run(lambda: wf.load(request_id))
 
     @app.post(
         "/requests/{request_id}/advance",

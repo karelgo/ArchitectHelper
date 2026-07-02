@@ -80,19 +80,24 @@ class HorizzonPublisher:
         path.write_text(xml, encoding="utf-8")
         return path
 
-    def _external_id(self, request: ArchitectureRequest, suffix: str) -> str:
-        return f"archflow-{request.id}-{suffix}"
+    @staticmethod
+    def _slug(text: str) -> str:
+        """Stable, content-derived identifier fragment (re-publish idempotency)."""
+        return "".join(c if c.isalnum() else "-" for c in text.casefold()).strip("-")
 
     def _push_to_api(
         self, request: ArchitectureRequest, model: Any, repository_id: int | None
     ) -> str:
         """Push elements/relationships as an architecture-automation collection.
 
-        Returns a human-readable summary; raises :class:`HorizzonError` on
-        any API failure.
+        Re-publishing replaces the request's previous collection (matched by
+        its ``archflow-<request id>`` externalId), and entity/link externalIds
+        derive from type+name — stable across publishes — so Horizzon never
+        accumulates duplicates. Raises :class:`HorizzonError` on API failure.
         """
         client = self._client or HorizzonClient(self._settings)
         owns_client = self._client is None
+        collection_external_id = f"archflow-{request.id}"
         try:
             if repository_id is None:
                 repositories = client.list_repositories()
@@ -100,10 +105,15 @@ class HorizzonPublisher:
                     raise HorizzonError("No repositories accessible to this API client")
                 repository_id = int(repositories[0]["id"])
 
+            # Replace semantics: drop the previous publish of this request.
+            for collection in client.list_collections(repository_id):
+                if collection.get("externalId") == collection_external_id:
+                    client.delete_collection(repository_id, str(collection.get("id")))
+
             collection = client.create_collection(
                 repository_id,
                 f"ArchFlow — {request.title}",
-                external_id=f"archflow-{request.id}",
+                external_id=collection_external_id,
             )
             collection_id = str(collection.get("id", collection.get("externalId", "")))
 
@@ -113,7 +123,10 @@ class HorizzonPublisher:
                 term = self._element_terms.get(element.type)
                 if term is None:
                     continue
-                external_id = self._external_id(request, element.id)
+                external_id = (
+                    f"{collection_external_id}-{self._slug(element.type)}-"
+                    f"{self._slug(element.name)}"
+                )
                 id_to_external[element.id] = external_id
                 entities.append(
                     {"externalId": external_id, "type": term, "name": {"en": element.name}}
@@ -129,7 +142,7 @@ class HorizzonPublisher:
                     continue
                 links.append(
                     {
-                        "externalId": self._external_id(request, rel.id),
+                        "externalId": f"{source}--{self._slug(rel.type)}--{target}",
                         "type": term,
                         "fromExternalId": source,
                         "toExternalId": target,

@@ -40,10 +40,24 @@ def _read_id(identifier: str) -> str:
     return identifier.removeprefix("id-")
 
 
+#: Characters outside the XML 1.0 legal range (ET emits them unescaped,
+#: producing files that strict importers like Archi/Enterprise Studio reject).
+_ILLEGAL_XML_CHARS = {
+    c: None
+    for c in range(0x20)
+    if chr(c) not in ("\t", "\n", "\r")
+}
+
+
+def _clean_text(text: str) -> str:
+    """Strip XML-1.0-illegal control characters from text content."""
+    return text.translate(_ILLEGAL_XML_CHARS)
+
+
 def _lang_text(parent: ET.Element, tag: str, text: str) -> ET.Element:
     """Append a child element carrying language-tagged text."""
     child = ET.SubElement(parent, _q(tag), {_XML_LANG: "en"})
-    child.text = text
+    child.text = _clean_text(text)
     return child
 
 
@@ -214,7 +228,8 @@ def _read_views(root: ET.Element) -> list[View]:
     for view_el in diagrams_el.findall(_q("view")):
         # iter() walks all descendants: nested <node> children (visual
         # containment, as written by Archi/Enterprise Studio) are flattened
-        # into the node list rather than silently dropped.
+        # into the node list rather than silently dropped. Exchange-format
+        # coordinates are treated as absolute canvas coordinates.
         nodes = [
             ViewNode(
                 id=_read_id(node_el.get("identifier", "")),

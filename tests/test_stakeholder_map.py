@@ -198,3 +198,49 @@ def test_stakeholder_map_xml_round_trip(request_fixture: ArchitectureRequest) ->
 
     restored = read_model(xml)
     assert restored.model_dump() == model.model_dump()
+
+
+def test_duplicate_stakeholder_names_each_get_their_own_links() -> None:
+    """Two same-named stakeholders both keep their concerns wired."""
+    from archflow.domain.models import ArchitectureRequest, Stakeholder
+
+    request = ArchitectureRequest(
+        title="Dup",
+        stakeholders=[
+            Stakeholder(name="Alice", role="Sales", concerns=["Adoption"]),
+            Stakeholder(name="Alice", role="Finance", concerns=["Budget"]),
+        ],
+    )
+    model = build_stakeholder_map(request)
+    stakeholder_els = [e for e in model.elements if e.type == "Stakeholder"]
+    assert len(stakeholder_els) == 2
+    linked_sources = {r.source for r in model.relationships if r.type == "Association"}
+    assert {e.id for e in stakeholder_els} <= linked_sources, "no orphaned duplicate"
+
+
+def test_name_matching_tolerates_whitespace() -> None:
+    from archflow.domain.models import ArchitectureRequest, Driver, Stakeholder
+
+    request = ArchitectureRequest(
+        title="WS",
+        stakeholders=[Stakeholder(name="Alice ", concerns=[])],
+        drivers=[Driver(name="Cost", stakeholder_names=[" alice"])],
+    )
+    model = build_stakeholder_map(request)
+    associations = [r for r in model.relationships if r.type == "Association"]
+    assert len(associations) == 1, "whitespace must not break stakeholder matching"
+
+
+def test_assessments_influence_goals_without_business_goal() -> None:
+    from archflow.domain.models import ArchitectureRequest, Assessment, Goal, Stakeholder
+
+    request = ArchitectureRequest(
+        title="NoBG",
+        business_goal="",
+        stakeholders=[Stakeholder(name="A", concerns=["c"])],
+        goals=[Goal(name="Reduce cost")],
+        assessments=[Assessment(name="Legacy EOL", driver_name="c")],
+    )
+    model = build_stakeholder_map(request)
+    influences = [r for r in model.relationships if r.type == "Influence"]
+    assert influences, "assessment must stay connected to the motivation chain"
