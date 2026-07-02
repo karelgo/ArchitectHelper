@@ -1,0 +1,35 @@
+name: Architecture request
+description: Submit a new architecture request to the governance process
+title: "[Arch] "
+labels: [architecture-request]
+body:
+  - type: input
+    id: requester
+    attributes:
+      label: Requester
+      description: Who is asking for this change?
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What needs to change and why?
+      description: Describe the change and the business goal it serves.
+    validations:
+      required: true
+  - type: input
+    id: domains
+    attributes:
+      label: Impacted domains
+      description: Comma-separated architecture domains (e.g. CRM, Integration, Data)
+  - type: textarea
+    id: stakeholders
+    attributes:
+      label: Known stakeholders
+      description: "One per line: Name — role — main concern"
+  - type: dropdown
+    id: size
+    attributes:
+      label: Expected size
+      options: [unknown, small, medium, large]
+      default: 0

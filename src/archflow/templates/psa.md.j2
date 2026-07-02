@@ -1,0 +1,94 @@
+# Project Start Architecture: {{ request.title }}
+
+| Field | Value |
+| --- | --- |
+| Request ID | `{{ request.id }}` |
+| Requester | {{ request.requester or "—" }} |
+| Classification | {{ request.classification.value if request.classification else "unclassified" }} |
+| Stage | {{ request.stage.value }} |
+| Date | {{ generated_at.strftime("%Y-%m-%d") }} |
+
+## Business goal
+
+{{ request.business_goal or "_Not specified._" }}
+
+## Description
+
+{{ request.description or "_Not specified._" }}
+
+## Impacted domains
+
+{% if request.impacted_domains %}
+{% for domain in request.impacted_domains %}
+- {{ domain }}
+{% endfor %}
+{% else %}
+_No impacted domains recorded._
+{% endif %}
+
+## Stakeholders and concerns
+
+{% if request.stakeholders %}
+| Name | Role | Influence | Interest | Attitude | Concerns |
+| --- | --- | --- | --- | --- | --- |
+{% for s in request.stakeholders %}
+| {{ s.name }} | {{ s.role or "—" }} | {{ s.influence.value }} | {{ s.interest.value }} | {{ s.attitude.value }} | {{ s.concerns | join("; ") or "—" }} |
+{% endfor %}
+{% else %}
+_No stakeholders recorded._
+{% endif %}
+
+## Drivers
+
+{% if request.drivers %}
+{% for driver in request.drivers %}
+- **{{ driver.name }}**{% if driver.description %} — {{ driver.description }}{% endif %}{% if driver.stakeholder_names %} (stakeholders: {{ driver.stakeholder_names | join(", ") }}){% endif %}
+
+{% endfor %}
+{% else %}
+_No drivers recorded._
+{% endif %}
+
+## Assessments
+
+{% if request.assessments %}
+{% for assessment in request.assessments %}
+- **{{ assessment.name }}**{% if assessment.description %} — {{ assessment.description }}{% endif %}{% if assessment.driver_name %} (driver: {{ assessment.driver_name }}){% endif %}
+
+{% endfor %}
+{% else %}
+_No assessments recorded._
+{% endif %}
+
+## Goals
+
+{% if request.goals %}
+{% for goal in request.goals %}
+- **{{ goal.name }}**{% if goal.description %} — {{ goal.description }}{% endif %}{% if goal.stakeholder_names %} (stakeholders: {{ goal.stakeholder_names | join(", ") }}){% endif %}
+
+{% endfor %}
+{% else %}
+_No goals recorded._
+{% endif %}
+
+## Decisions
+
+{% if request.decisions %}
+| Title | Status | Rationale | Decided by |
+| --- | --- | --- | --- |
+{% for d in request.decisions %}
+| {{ d.title }} | {{ d.status.value }} | {{ d.rationale or "—" }} | {{ d.decided_by or "—" }} |
+{% endfor %}
+{% else %}
+_No decisions recorded._
+{% endif %}
+
+## Artifacts
+
+{% if request.artifacts %}
+{% for artifact in request.artifacts %}
+- {{ artifact.name }} ({{ artifact.kind.value }}) — `{{ artifact.path }}`
+{% endfor %}
+{% else %}
+_No artifacts generated yet._
+{% endif %}

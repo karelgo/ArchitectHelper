@@ -1,0 +1,33 @@
+{
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+                    }
+                ]
+            }
+        ]
+    },
+    "permissions": {
+        "allow": [
+            "Bash(.venv/bin/python -m pytest:*)",
+            "Bash(.venv/bin/python -m ruff:*)",
+            "Bash(.venv/bin/python -m mypy:*)",
+            "Bash(.venv/bin/pytest:*)",
+            "Bash(.venv/bin/ruff:*)",
+            "Bash(.venv/bin/mypy:*)",
+            "Bash(.venv/bin/pip install:*)",
+            "Bash(.venv/bin/archflow:*)",
+            "Bash(scripts/verify.sh)",
+            "Bash(python3 -m venv:*)",
+            "Read(//home/user/StakeholderMapArchimate/**)"
+        ],
+        "deny": [
+            "Read(./.env)",
+            "Read(.env)"
+        ]
+    }
+}

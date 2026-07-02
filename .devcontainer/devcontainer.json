@@ -1,0 +1,16 @@
+{
+    "name": "archflow",
+    "image": "mcr.microsoft.com/devcontainers/python:3.11",
+    "postCreateCommand": "python -m venv .venv && .venv/bin/pip install -e '.[dev]'",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python",
+                "charliermarsh.ruff"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": ".venv/bin/python"
+            }
+        }
+    }
+}
