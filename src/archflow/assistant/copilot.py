@@ -7,6 +7,7 @@ conversation lives on the project (``assistant_history``) in API wire format.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
@@ -128,6 +129,23 @@ class ArchiMateCopilot:
         ``context`` (e.g. the linked governance request) rides as an extra
         system block after the cached prompt, so it never pollutes history.
         """
+        final: dict[str, Any] = {}
+        for event in self.chat_stream(project, user_message, context=context):
+            if event["type"] == "final":
+                final = event
+        return CopilotReply(
+            reply=final["reply"], actions=final["actions"], model_updated=final["model_updated"]
+        )
+
+    def chat_stream(
+        self, project: ViewProject, user_message: str, context: str | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """:meth:`chat` as a stream of progress events.
+
+        Yields a ``round`` event after each tool round (with that round's
+        actions, so the UI can show live progress) and always ends with one
+        ``final`` event carrying the reply; history persists at that point.
+        """
         executor = ToolExecutor(project)
         messages: list[dict[str, Any]] = [*project.assistant_history]
         messages.append({"role": "user", "content": user_message})
@@ -144,6 +162,7 @@ class ArchiMateCopilot:
             )
 
         reply_text = ""
+        rounds = 0
         for _ in range(_MAX_ROUNDS):
             response = self._messages.create(
                 model=self._settings.assistant_model,
@@ -171,6 +190,7 @@ class ArchiMateCopilot:
             if response.stop_reason != "tool_use" or not tool_uses:
                 break
 
+            actions_before = len(executor.actions)
             results = [
                 {
                     "type": "tool_result",
@@ -180,6 +200,13 @@ class ArchiMateCopilot:
                 for block in tool_uses
             ]
             messages.append({"role": "user", "content": results})
+            rounds += 1
+            yield {
+                "type": "round",
+                "round": rounds,
+                "actions": executor.actions[actions_before:],
+                "model_updated": executor.changed,
+            }
         else:
             reply_text = reply_text or (
                 "I hit the per-turn tool limit — the model so far is saved. "
@@ -188,8 +215,9 @@ class ArchiMateCopilot:
 
         project.assistant_history = _trim_history(messages)
         project.touch()
-        return CopilotReply(
-            reply=reply_text or "(no reply)",
-            actions=executor.actions,
-            model_updated=executor.changed,
-        )
+        yield {
+            "type": "final",
+            "reply": reply_text or "(no reply)",
+            "actions": executor.actions,
+            "model_updated": executor.changed,
+        }

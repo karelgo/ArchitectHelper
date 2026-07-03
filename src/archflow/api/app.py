@@ -12,7 +12,7 @@ from collections.abc import Callable
 from importlib import resources
 from typing import TypeVar
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -40,6 +40,7 @@ from archflow.storage import ViewProjectRepository, create_db_engine
 from archflow.studio.service import StudioService
 from archflow.workflow.engine import (
     AdvanceResult,
+    GateReport,
     GuardViolation,
     WorkflowEngine,
     build_default_engine,
@@ -128,6 +129,15 @@ def create_app(
     )
     def get_request(request_id: str) -> ArchitectureRequest:
         return run(lambda: wf.load(request_id))
+
+    @app.get(
+        "/requests/{request_id}/gate",
+        response_model=GateReport,
+        tags=["workflow"],
+        summary="The current gate's conditions with live state (advance dry run)",
+    )
+    def gate(request_id: str) -> GateReport:
+        return run(lambda: wf.gate(request_id))
 
     @app.post(
         "/requests/{request_id}/advance",
@@ -227,6 +237,23 @@ def create_app(
     )
     def reject(request_id: str, payload: RejectIn) -> ArchitectureRequest:
         return run(lambda: wf.reject(request_id, actor=payload.actor, reason=payload.reason))
+
+    @app.get(
+        "/requests/{request_id}/map.svg",
+        tags=["requests"],
+        summary="The request's stakeholder map rendered as SVG (built on the fly)",
+        response_class=Response,
+    )
+    def stakeholder_map_svg(request_id: str) -> Response:
+        from archflow.archimate.stakeholder_map import build_stakeholder_map
+        from archflow.archimate.svg import view_to_svg
+
+        request = run(lambda: wf.load(request_id))
+        return Response(
+            content=view_to_svg(build_stakeholder_map(request)),
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @app.get(
         "/requests/{request_id}/events",

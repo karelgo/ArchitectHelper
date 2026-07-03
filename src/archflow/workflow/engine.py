@@ -27,7 +27,14 @@ from archflow.domain.models import (
 )
 from archflow.storage.repository import EventLog, RequestRepository
 from archflow.workflow.actions import ActionRegistry, AutomationContext, default_registry
-from archflow.workflow.stages import AUTO_KEYS, auto_complete, checklist_for, gate_for
+from archflow.workflow.stages import (
+    AUTO_KEYS,
+    GateCondition,
+    auto_complete,
+    checklist_for,
+    gate_for,
+    gate_report,
+)
 
 
 class GuardViolation(ValueError):
@@ -58,6 +65,15 @@ class AdvanceResult(BaseModel):
     to_stage: Stage | None = None
     reasons: list[str] = Field(default_factory=list)
     generated: list[Artifact] = Field(default_factory=list)
+
+
+class GateReport(BaseModel):
+    """The current gate's conditions and whether the request may pass."""
+
+    stage: Stage
+    next_stage: Stage | None
+    ok: bool
+    conditions: list[GateCondition] = Field(default_factory=list)
 
 
 class WorkflowEngine:
@@ -123,6 +139,20 @@ class WorkflowEngine:
             request.id, EventType.STAGE_ENTERED, payload={"stage": Stage.INTAKE.value}
         )
         return request
+
+    def gate(self, request_id: str) -> GateReport:
+        """The current gate's conditions with live state — advance's dry run."""
+        request = self._load(request_id)
+        if bool(auto_complete(request)):  # keep the report truthful
+            request.touch()
+            self._repo.save(request)
+        conditions = gate_report(request)
+        return GateReport(
+            stage=request.stage,
+            next_stage=next_stage(request),
+            ok=all(c.met for c in conditions),
+            conditions=conditions,
+        )
 
     def advance(self, request_id: str, actor: str = "system") -> AdvanceResult:
         """Try to move the request to the next stage, running gate and actions."""

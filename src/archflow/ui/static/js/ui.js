@@ -31,17 +31,32 @@ export function openModal(content) {
     class: 'modal-backdrop',
     onclick: (event) => { if (event.target === backdrop) close(); },
   }, el('div', { class: 'modal' }, content));
-  function close() { backdrop.remove(); }
+  function onKey(event) { if (event.key === 'Escape') close(); }
+  function close() {
+    document.removeEventListener('keydown', onKey);
+    backdrop.remove();
+  }
+  document.addEventListener('keydown', onKey);
   root.append(backdrop);
   return close;
 }
 
-export function openDrawer(content) {
+export function openDrawer(content, onClose) {
   const root = document.getElementById('drawer-root');
   root.innerHTML = '';
   const backdrop = el('div', { class: 'drawer-backdrop', onclick: close });
   const drawer = el('div', { class: 'drawer' }, content);
-  function close() { root.innerHTML = ''; }
+  function onKey(event) {
+    // A modal stacked on top of the drawer owns Escape until it closes.
+    if (event.key === 'Escape' && !document.querySelector('.modal-backdrop')) close();
+  }
+  function close() {
+    document.removeEventListener('keydown', onKey);
+    if (!root.children.length) return; // already closed (e.g. route change)
+    root.innerHTML = '';
+    if (onClose) onClose();
+  }
+  document.addEventListener('keydown', onKey);
   root.append(backdrop, drawer);
   return close;
 }

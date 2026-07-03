@@ -39,6 +39,10 @@ export async function renderStudioList(root) {
     projects.map((project) => el('div', {
       class: 'project-card', onclick: () => { location.hash = `#/studio/${project.id}`; },
     },
+      el('img', {
+        class: 'pc-thumb', alt: '', loading: 'lazy',
+        src: api.previewUrl(project.id, project.updated_at),
+      }),
       el('div', { class: 'pc-name' }, project.name),
       el('div', { class: 'pc-meta' },
         `${project.elements} elements · ${project.relationships} relationships`),
@@ -215,9 +219,14 @@ function createDrawioEmbed(config, projectId, saveState) {
   const origin = config.drawio_embed_url.replace(/\/$/, '');
   const src = `${origin}/?embed=1&proto=json&spin=1&noSaveBtn=0&saveAndExit=0&noExitBtn=1&ui=atlas`;
   const frame = el('iframe', { class: 'drawio-frame', src, title: 'draw.io editor' });
+  const previewImg = el('img', {
+    class: 'canvas-preview', alt: 'Read-only preview of the current view',
+    src: api.previewUrl(projectId, 'fallback'),
+  });
   const fallback = el('div', { class: 'canvas-fallback', style: 'display:none' },
     el('div', {},
-      el('p', {}, `The draw.io editor (${origin}) did not load — likely no network access to it.`),
+      previewImg,
+      el('p', {}, `Read-only preview — the draw.io editor (${origin}) did not load, likely no network access to it.`),
       el('p', {}, 'The copilot and exports still work; set ARCHFLOW_DRAWIO_EMBED_URL to a reachable (e.g. self-hosted) draw.io.'),
     ));
   const node = el('div', { style: 'display:contents' }, frame, fallback);
@@ -270,7 +279,12 @@ function createDrawioEmbed(config, projectId, saveState) {
     node,
     load() { /* iframe src already loading; init message drives the rest */ },
     async reload() {
-      if (ready) await pushCurrentDocument();
+      if (ready) {
+        await pushCurrentDocument();
+      } else {
+        // Fallback mode: refresh the read-only preview instead.
+        previewImg.src = api.previewUrl(projectId, String(Date.now()));
+      }
     },
     currentXml() {
       if (!ready) return Promise.resolve(null);
@@ -322,7 +336,10 @@ function buildCopilotPanel(project, config, { onModelUpdated }) {
       'Tell me what you want to model, or pick a suggestion below.'));
   }
 
+  let streaming = null; // AbortController while a turn is running
+
   async function submit(text) {
+    if (streaming) return; // one turn at a time; the button reads Stop now
     const message = (text || input.value).trim();
     if (!message) return;
     input.value = '';
@@ -330,25 +347,55 @@ function buildCopilotPanel(project, config, { onModelUpdated }) {
     const pending = el('div', { class: 'msg thinking' }, 'Modeling…');
     log.append(pending);
     log.scrollTop = log.scrollHeight;
-    send.disabled = true;
+    streaming = new AbortController();
+    send.textContent = 'Stop';
+
+    let final = null;
+    let sawError = null;
+    let modelTouched = false;
     try {
-      const reply = await api.copilot(project.id, message);
+      await api.copilotStream(project.id, message, (event) => {
+        if (event.type === 'round') {
+          pending.textContent = `Modeling… (round ${event.round})`;
+          if (event.actions.length) {
+            log.insertBefore(el('div', { class: 'msg actions' }, event.actions.join(' · ')), pending);
+          }
+          modelTouched = modelTouched || event.model_updated;
+          log.scrollTop = log.scrollHeight;
+        } else if (event.type === 'final') {
+          final = event;
+        } else if (event.type === 'error') {
+          sawError = event.message;
+        }
+      }, streaming.signal);
       pending.remove();
-      if (reply.actions.length) {
-        log.append(el('div', { class: 'msg actions' }, reply.actions.join(' · ')));
+      if (final) {
+        log.append(el('div', { class: 'msg assistant' }, final.reply));
+        if (final.model_updated) await onModelUpdated();
+      } else if (sawError) {
+        log.append(el('div', { class: 'msg assistant' }, `⚠️ ${sawError}`));
+        if (modelTouched) await onModelUpdated();
       }
-      log.append(el('div', { class: 'msg assistant' }, reply.reply));
-      if (reply.model_updated) await onModelUpdated();
     } catch (error) {
       pending.remove();
-      log.append(el('div', { class: 'msg assistant' }, `⚠️ ${error.message}`));
+      if (error.name === 'AbortError') {
+        log.append(el('div', { class: 'msg assistant' },
+          'Stopped listening — the round in progress finishes on the server; reload to see its result.'));
+        if (modelTouched) await onModelUpdated();
+      } else {
+        log.append(el('div', { class: 'msg assistant' }, `⚠️ ${error.message}`));
+      }
     } finally {
-      send.disabled = false;
+      streaming = null;
+      send.textContent = 'Send';
       log.scrollTop = log.scrollHeight;
     }
   }
 
-  send.addEventListener('click', () => submit());
+  send.addEventListener('click', () => {
+    if (streaming) { streaming.abort(); return; }
+    submit();
+  });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); }
   });

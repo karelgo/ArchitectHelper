@@ -1,7 +1,7 @@
 // App shell: hash router + boot.
 
 import { api } from './api.js';
-import { renderBoard, newRequestModal } from './board.js';
+import { renderBoard, newRequestModal, openRequestDrawer } from './board.js';
 import { renderStudioList, renderStudioEditor } from './studio.js';
 
 const root = document.getElementById('view-root');
@@ -19,12 +19,18 @@ async function route() {
   document.getElementById('modal-root').innerHTML = '';
   const hash = location.hash || '#/board';
   const studioMatch = hash.match(/^#\/studio\/(.+)$/);
+  const requestMatch = hash.match(/^#\/request\/([\w-]+)$/);
   if (studioMatch) {
     setActiveNav('studio');
     await renderStudioEditor(root, studioMatch[1], config);
   } else if (hash.startsWith('#/studio')) {
     setActiveNav('studio');
     await renderStudioList(root);
+  } else if (requestMatch) {
+    // Deep link: the board behind, the request's drawer on top.
+    setActiveNav('board');
+    await renderBoard(root, config);
+    await openRequestDrawer(requestMatch[1], root);
   } else {
     setActiveNav('board');
     await renderBoard(root, config);

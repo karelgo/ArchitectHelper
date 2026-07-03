@@ -6,11 +6,18 @@ workspaces:
 ## Governance
 
 A kanban of the pipeline (intake → … → publication) with a KPI strip.
-Clicking a card opens the request drawer: gate-aware **Advance** (blocked
-advances list exactly what's missing), triage/stakeholder/review/decision
-forms that appear only in the stages where they're valid, artifacts,
-checklist and the full audit timeline. **New request** registers an intake
-with stakeholders in `Name : Role : concern | concern` format.
+Clicking a card opens the request drawer at a shareable URL
+(`#/request/{id}` — the **Copy link** button puts it on the clipboard).
+The drawer shows the **live gate**: every condition the current gate
+checks with its met/unmet state (`GET /requests/{id}/gate`), so the
+Advance button says where it goes ("Advance to Peer review") instead of
+failing informatively. Actions update the drawer in place — no flicker,
+scroll preserved — and Escape closes it. Stage forms
+(triage/stakeholder/review/decision) appear only where they're valid,
+plus artifacts, an inline **stakeholder-map preview**
+(`/requests/{id}/map.svg`, rendered server-side), the checklist and the
+audit timeline. **New request** registers an intake with stakeholders in
+`Name : Role : concern | concern` format.
 
 ### AI assist in the drawer
 
@@ -59,7 +66,9 @@ A three-pane ArchiMate view designer:
 
 Projects can start blank, be seeded from a governance request's stakeholder
 map ("Open map in Studio" in the drawer), or be imported from any ArchiMate
-Open Exchange file.
+Open Exchange file. The gallery shows **live SVG thumbnails**
+(`/studio/views/{id}/preview.svg`, rendered server-side); the same
+renderer provides a read-only preview when the draw.io embed can't load.
 
 ## Configuration
 
@@ -71,8 +80,13 @@ Open Exchange file.
 
 ## How the copilot works
 
-Each chat turn runs a tool-use loop server-side (`POST
-/studio/views/{id}/assistant`): Claude calls `get_model`, `add_elements`,
+Each chat turn runs a tool-use loop server-side. The UI uses the
+streaming variant (`POST /studio/views/{id}/assistant/stream`,
+server-sent events): each tool round emits its actions live ("+3
+elements · created view"), so long turns show progress instead of a
+silent spinner, and the Send button becomes **Stop** while a turn runs.
+The non-streaming `POST /studio/views/{id}/assistant` returns the same
+result in one response. In the loop Claude calls `get_model`, `add_elements`,
 `add_relationships`, `remove_elements`, `create_view`, `rename_model` and
 `lint_model` against the project's canonical model. Validation failures are
 fed back as tool results so it self-corrects, and it lints its own work

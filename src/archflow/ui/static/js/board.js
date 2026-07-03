@@ -46,7 +46,7 @@ export async function renderBoard(root, config = null) {
         ),
         el('div', { class: 'column-body' },
           cards.length === 0 ? el('div', { class: 'empty-note' }, '—') :
-          cards.map((request) => requestCard(request, root)),
+          cards.map((request) => requestCard(request)),
         ),
       ),
     );
@@ -67,10 +67,10 @@ function kpi(value, label) {
   );
 }
 
-function requestCard(request, root) {
+function requestCard(request) {
   return el('div', {
     class: 'card',
-    onclick: () => openRequestDrawer(request.id, root),
+    onclick: () => { location.hash = `#/request/${request.id}`; },
   },
     el('div', { class: 'card-title' }, request.title),
     el('div', { class: 'card-meta' },
@@ -81,152 +81,192 @@ function requestCard(request, root) {
   );
 }
 
+function copyLink(requestId) {
+  const url = `${location.origin}${location.pathname}#/request/${requestId}`;
+  const done = () => toast('Link copied');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(done, () => toast(url));
+  } else {
+    toast(url); // no clipboard access: at least show the link
+  }
+}
+
 export async function openRequestDrawer(requestId, root) {
-  let request, events;
-  try {
-    [request, events] = await Promise.all([api.getRequest(requestId), api.events(requestId)]);
-  } catch (error) {
-    toast(error.message, 'error');
-    return;
-  }
+  const head = el('div', { class: 'drawer-head' });
+  const body = el('div', { class: 'drawer-body' }, el('p', { class: 'empty-note' }, 'Loading…'));
+  const close = openDrawer(el('div', { style: 'display:contents' }, head, body), () => {
+    // Leaving the drawer restores the board URL without re-rendering.
+    if (location.hash.startsWith('#/request/')) history.replaceState(null, '', '#/board');
+  });
 
-  const body = el('div', { class: 'drawer-body' });
-  const refresh = () => { close(); openRequestDrawer(requestId, root); renderBoard(root); };
+  // Re-renders in place: the drawer stays open and keeps its scroll position.
+  const refresh = async () => { await render(); renderBoard(root); };
 
-  // --- primary action -------------------------------------------------------
-  const terminal = ['done', 'rejected'].includes(request.stage);
-  const actionRow = el('div', { class: 'inline-form' },
-    el('button', {
-      class: 'btn btn-primary', disabled: terminal ? '' : undefined,
-      onclick: async () => {
-        try {
-          const result = await api.advance(requestId);
-          if (result.advanced) {
-            toast(`Advanced to ${STAGE_LABELS[result.to_stage]}`);
-            refresh();
-          } else {
-            showBlockReasons(result.reasons);
-          }
-        } catch (error) { toast(error.message, 'error'); }
-      },
-    }, terminal ? 'Completed' : 'Advance stage'),
-    terminal ? null : el('button', {
-      class: 'btn btn-danger',
-      onclick: () => rejectForm(requestId, refresh),
-    }, 'Reject…'),
-    el('a', { class: 'btn', href: '#/studio', onclick: async (event) => {
-      event.preventDefault();
-      try {
-        const project = await api.createProject({ name: '', request_id: requestId });
-        location.hash = `#/studio/${project.id}`;
-      } catch (error) { toast(error.message, 'error'); }
-    } }, 'Open map in Studio'),
-  );
-
-  const blockBox = el('div');
-  function showBlockReasons(reasons) {
-    blockBox.innerHTML = '';
-    blockBox.append(el('div', { class: 'block-reasons' },
-      el('strong', {}, 'Blocked — the gate needs:'),
-      el('ul', {}, reasons.map((reason) => el('li', {}, reason))),
-    ));
-  }
-
-  body.append(actionRow, blockBox);
-
-  // --- AI assist (drafts only — the human applies/records) --------------------
-  if (assistantOn && !terminal) {
-    const aiRow = el('div', { class: 'inline-form' });
-    if (['intake', 'triage', 'stakeholder_analysis'].includes(request.stage)) {
-      aiRow.append(aiButton('✨ Draft stakeholder analysis', async () => {
-        const proposal = await api.aiStakeholders(requestId);
-        proposalModal(request, proposal, refresh);
-      }));
+  async function render() {
+    let request, events, gate;
+    try {
+      [request, events, gate] = await Promise.all(
+        [api.getRequest(requestId), api.events(requestId), api.gate(requestId)]);
+    } catch (error) {
+      toast(error.message, 'error');
+      close();
+      return;
     }
-    if (['stakeholder_analysis', 'drafting', 'peer_review'].includes(request.stage)) {
-      aiRow.append(aiButton('✨ Draft PSA', async () => {
-        const draft = await api.aiPsa(requestId);
-        psaModal(request, draft.markdown, refresh);
-      }));
-    }
-    if (['peer_review', 'board_approval'].includes(request.stage)) {
-      aiRow.append(aiButton('✨ AI pre-review', async () => {
-        reviewModal(await api.aiReview(requestId));
-      }));
-    }
-    if (aiRow.childElementCount) body.append(el('h3', {}, 'AI assist'), aiRow);
-  }
+    const scroll = body.scrollTop;
+    const terminal = ['done', 'rejected'].includes(request.stage);
 
-  // --- stage-specific forms ---------------------------------------------------
-  if (request.stage === 'triage') {
-    body.append(el('h3', {}, 'Triage'), triageForm(request, refresh));
-  }
-  if (['intake', 'triage', 'stakeholder_analysis'].includes(request.stage)) {
-    body.append(el('h3', {}, 'Add stakeholder'), stakeholderForm(requestId, refresh));
-  }
-  if (request.stage === 'peer_review') {
-    body.append(el('h3', {}, 'Record review'), reviewForm(requestId, refresh));
-  }
-  if (['drafting', 'peer_review', 'board_approval'].includes(request.stage)) {
-    body.append(el('h3', {}, 'Record decision'), decisionForm(request, refresh));
-  }
-
-  // --- facts ---------------------------------------------------------------------
-  if (request.stakeholders.length) {
-    body.append(el('h3', {}, 'Stakeholders'),
-      ...request.stakeholders.map((s) => el('div', { class: 'item-row' },
-        el('span', {}, `${s.name}${s.role ? ` — ${s.role}` : ''}`),
-        el('span', { style: 'color:var(--muted)' }, s.concerns.join(', ')),
-      )));
-  }
-
-  body.append(el('h3', {}, 'Checklist'), el('ul', { class: 'checklist' },
-    request.checklist.map((item) => el('li', { class: item.done ? 'done' : '' },
-      el('span', { class: 'tick' }, item.done ? '[x]' : '[ ]'),
-      el('span', {}, `${item.description} `,
-        el('span', { class: 'stage-tag' }, `(${STAGE_LABELS[item.stage]})`)),
-    ))));
-
-  if (request.decisions.length) {
-    body.append(el('h3', {}, 'Decisions'),
-      ...request.decisions.map((d) => el('div', { class: 'item-row' },
-        el('span', {}, d.title),
-        el('span', { class: `chip chip-${d.status === 'approved' ? 'small' : d.status === 'rejected' ? 'large' : 'medium'}` }, d.status),
-      )));
-  }
-  if (request.reviews.length) {
-    body.append(el('h3', {}, 'Reviews'),
-      ...request.reviews.map((r) => el('div', { class: 'item-row' },
-        el('span', {}, `${r.reviewer}${r.comments ? ` — ${r.comments}` : ''}`),
-        el('span', { class: `chip chip-${r.verdict === 'approve' ? 'small' : 'large'}` }, r.verdict.replaceAll('_', ' ')),
-      )));
-  }
-  if (request.artifacts.length) {
-    body.append(el('h3', {}, 'Artifacts'),
-      ...request.artifacts.map((a) => el('div', { class: 'item-row' },
-        el('span', {}, a.kind.replaceAll('_', ' ')),
-        el('span', { class: 'artifact-link' }, a.path),
-      )));
-  }
-
-  body.append(el('h3', {}, 'Timeline'), el('ul', { class: 'timeline' },
-    events.slice().reverse().map((event) => el('li', {},
-      el('span', { class: 't-type' }, event.type.replaceAll('_', ' ')),
-      ' ', describeEvent(event),
-      el('div', { class: 't-actor' }, `${event.actor} · ${new Date(event.occurred_at).toLocaleString()}`),
-    ))));
-
-  const close = openDrawer(el('div', { style: 'display:contents' },
-    el('div', { class: 'drawer-head' },
+    head.innerHTML = '';
+    head.append(
       el('button', { class: 'drawer-close', onclick: () => close(), 'aria-label': 'Close' }, '✕'),
       el('div', { class: 'drawer-title' }, request.title),
       el('div', { class: 'drawer-sub' },
         stageChip(request.stage), ' ', classificationChip(request.classification),
         request.impacted_domains.length ? ` · ${request.impacted_domains.join(', ')}` : '',
+        ' ',
+        el('button', { class: 'btn btn-ghost btn-sm', onclick: () => copyLink(requestId) }, '🔗 Copy link'),
       ),
-    ),
-    body,
-  ));
+    );
+
+    body.innerHTML = '';
+
+    // --- primary action + live gate ------------------------------------------
+    const advanceLabel = terminal ? 'Completed'
+      : (gate.ok && gate.next_stage ? `Advance to ${STAGE_LABELS[gate.next_stage]}` : 'Advance stage');
+    const gatePanel = terminal ? null : el('div', { class: 'gate-panel' },
+      el('h3', {}, gate.next_stage ? `Gate → ${STAGE_LABELS[gate.next_stage]}` : 'Gate'),
+      el('ul', { class: 'checklist' },
+        gate.conditions.map((c) => el('li', { class: c.met ? 'done' : '' },
+          el('span', { class: 'tick' }, c.met ? '[x]' : '[ ]'),
+          el('span', {}, c.description),
+        ))),
+      gate.conditions.length === 0
+        ? el('div', { class: 'empty-note' }, 'Nothing to check — this gate is open.') : null,
+    );
+
+    body.append(el('div', { class: 'inline-form' },
+      el('button', {
+        class: gate.ok && !terminal ? 'btn btn-primary' : 'btn',
+        disabled: terminal ? '' : undefined,
+        onclick: async () => {
+          try {
+            const result = await api.advance(requestId);
+            if (result.advanced) {
+              toast(`Advanced to ${STAGE_LABELS[result.to_stage]}`);
+              await refresh();
+            } else {
+              toast('Blocked — the gate lists what is still open', 'error');
+              await render();
+              const panel = body.querySelector('.gate-panel');
+              if (panel) panel.classList.add('flash');
+            }
+          } catch (error) { toast(error.message, 'error'); }
+        },
+      }, advanceLabel),
+      terminal ? null : el('button', {
+        class: 'btn btn-danger',
+        onclick: () => rejectForm(requestId, refresh),
+      }, 'Reject…'),
+      el('a', { class: 'btn', href: '#/studio', onclick: async (event) => {
+        event.preventDefault();
+        try {
+          const project = await api.createProject({ name: '', request_id: requestId });
+          location.hash = `#/studio/${project.id}`;
+        } catch (error) { toast(error.message, 'error'); }
+      } }, 'Open map in Studio'),
+    ));
+    if (gatePanel) body.append(gatePanel);
+
+    // --- AI assist (drafts only — the human applies/records) --------------------
+    if (assistantOn && !terminal) {
+      const aiRow = el('div', { class: 'inline-form' });
+      if (['intake', 'triage', 'stakeholder_analysis'].includes(request.stage)) {
+        aiRow.append(aiButton('✨ Draft stakeholder analysis', async () => {
+          const proposal = await api.aiStakeholders(requestId);
+          proposalModal(request, proposal, refresh);
+        }));
+      }
+      if (['stakeholder_analysis', 'drafting', 'peer_review'].includes(request.stage)) {
+        aiRow.append(aiButton('✨ Draft PSA', async () => {
+          const draft = await api.aiPsa(requestId);
+          psaModal(request, draft.markdown, refresh);
+        }));
+      }
+      if (['peer_review', 'board_approval'].includes(request.stage)) {
+        aiRow.append(aiButton('✨ AI pre-review', async () => {
+          reviewModal(await api.aiReview(requestId));
+        }));
+      }
+      if (aiRow.childElementCount) body.append(el('h3', {}, 'AI assist'), aiRow);
+    }
+
+    // --- stage-specific forms ---------------------------------------------------
+    if (request.stage === 'triage') {
+      body.append(el('h3', {}, 'Triage'), triageForm(request, refresh));
+    }
+    if (['intake', 'triage', 'stakeholder_analysis'].includes(request.stage)) {
+      body.append(el('h3', {}, 'Add stakeholder'), stakeholderForm(requestId, refresh));
+    }
+    if (request.stage === 'peer_review') {
+      body.append(el('h3', {}, 'Record review'), reviewForm(requestId, refresh));
+    }
+    if (['drafting', 'peer_review', 'board_approval'].includes(request.stage)) {
+      body.append(el('h3', {}, 'Record decision'), decisionForm(request, refresh));
+    }
+
+    // --- facts ---------------------------------------------------------------------
+    if (request.stakeholders.length) {
+      body.append(el('h3', {}, 'Stakeholders'),
+        ...request.stakeholders.map((s) => el('div', { class: 'item-row' },
+          el('span', {}, `${s.name}${s.role ? ` — ${s.role}` : ''}`),
+          el('span', { style: 'color:var(--muted)' }, s.concerns.join(', ')),
+        )),
+        el('h3', {}, 'Stakeholder map'),
+        el('img', {
+          class: 'map-preview', alt: `Stakeholder map for ${request.title}`, loading: 'lazy',
+          src: api.mapUrl(requestId, request.updated_at),
+        }));
+    }
+
+    body.append(el('h3', {}, 'Checklist'), el('ul', { class: 'checklist' },
+      request.checklist.map((item) => el('li', { class: item.done ? 'done' : '' },
+        el('span', { class: 'tick' }, item.done ? '[x]' : '[ ]'),
+        el('span', {}, `${item.description} `,
+          el('span', { class: 'stage-tag' }, `(${STAGE_LABELS[item.stage]})`)),
+      ))));
+
+    if (request.decisions.length) {
+      body.append(el('h3', {}, 'Decisions'),
+        ...request.decisions.map((d) => el('div', { class: 'item-row' },
+          el('span', {}, d.title),
+          el('span', { class: `chip chip-${d.status === 'approved' ? 'small' : d.status === 'rejected' ? 'large' : 'medium'}` }, d.status),
+        )));
+    }
+    if (request.reviews.length) {
+      body.append(el('h3', {}, 'Reviews'),
+        ...request.reviews.map((r) => el('div', { class: 'item-row' },
+          el('span', {}, `${r.reviewer}${r.comments ? ` — ${r.comments}` : ''}`),
+          el('span', { class: `chip chip-${r.verdict === 'approve' ? 'small' : 'large'}` }, r.verdict.replaceAll('_', ' ')),
+        )));
+    }
+    if (request.artifacts.length) {
+      body.append(el('h3', {}, 'Artifacts'),
+        ...request.artifacts.map((a) => el('div', { class: 'item-row' },
+          el('span', {}, a.kind.replaceAll('_', ' ')),
+          el('span', { class: 'artifact-link' }, a.path),
+        )));
+    }
+
+    body.append(el('h3', {}, 'Timeline'), el('ul', { class: 'timeline' },
+      events.slice().reverse().map((event) => el('li', {},
+        el('span', { class: 't-type' }, event.type.replaceAll('_', ' ')),
+        ' ', describeEvent(event),
+        el('div', { class: 't-actor' }, `${event.actor} · ${new Date(event.occurred_at).toLocaleString()}`),
+      ))));
+
+    body.scrollTop = scroll;
+  }
+
+  await render();
 }
 
 // A button that shows a busy state while its (slow, LLM-backed) action runs.

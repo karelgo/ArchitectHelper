@@ -220,3 +220,68 @@ def test_auto_completed_checklist_item_is_409_not_404(client: TestClient) -> Non
     )
     assert response.status_code == 409
     assert "automatically" in response.json()["detail"]
+
+
+def test_gate_report_shows_live_conditions(client: TestClient) -> None:
+    """The gate endpoint is advance's dry run — same rules, no side effects."""
+    request_id = create_request(client)
+
+    gate = client.get(f"/requests/{request_id}/gate").json()
+    assert gate["stage"] == "intake"
+    assert gate["next_stage"] == "triage"
+    assert gate["ok"] is True  # payload satisfies the intake checklist
+    assert gate["conditions"][0]["key"] == "intake.described"
+    assert gate["conditions"][0]["met"] is True
+
+    client.post(f"/requests/{request_id}/advance", json={})  # -> triage
+    gate = client.get(f"/requests/{request_id}/gate").json()
+    assert gate["ok"] is False
+    by_key = {c["key"]: c["met"] for c in gate["conditions"]}
+    assert by_key == {"triage.classified": False, "triage.domains": False}
+
+    client.post(
+        f"/requests/{request_id}/triage",
+        json={"classification": "small", "impacted_domains": ["crm"]},
+    )
+    gate = client.get(f"/requests/{request_id}/gate").json()
+    assert gate["ok"] is True and gate["next_stage"] == "stakeholder_analysis"
+
+    assert client.get("/requests/nope/gate").status_code == 404
+
+
+def test_gate_report_peer_review_condition(client: TestClient) -> None:
+    request_id = create_request(client)
+    client.post(f"/requests/{request_id}/advance", json={})
+    client.post(
+        f"/requests/{request_id}/triage",
+        json={"classification": "medium", "impacted_domains": ["crm"]},
+    )
+    for _ in range(2):  # -> stakeholder_analysis -> drafting
+        client.post(f"/requests/{request_id}/advance", json={})
+    client.post(
+        f"/requests/{request_id}/decisions",
+        json={"title": "Buy over build", "rationale": "", "status": "proposed", "decided_by": "a"},
+    )
+    client.post(f"/requests/{request_id}/advance", json={})  # -> peer_review
+
+    gate = client.get(f"/requests/{request_id}/gate").json()
+    assert gate["stage"] == "peer_review"
+    review_condition = next(c for c in gate["conditions"] if c["key"] == "review.approved")
+    assert review_condition["met"] is False
+
+    client.post(
+        f"/requests/{request_id}/reviews",
+        json={"reviewer": "Bob", "verdict": "approve", "comments": ""},
+    )
+    gate = client.get(f"/requests/{request_id}/gate").json()
+    assert gate["ok"] is True
+
+
+def test_request_map_svg(client: TestClient) -> None:
+    request_id = create_request(client)
+    response = client.get(f"/requests/{request_id}/map.svg")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert "Alice" in response.text, "stakeholders appear on the rendered map"
+
+    assert client.get("/requests/nope/map.svg").status_code == 404

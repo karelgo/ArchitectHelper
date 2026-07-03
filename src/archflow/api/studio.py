@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Iterator
 from typing import TypeVar
 
 from fastapi import APIRouter, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from archflow.archimate.lint import LintFinding, lint_model
+from archflow.archimate.svg import view_to_svg
 from archflow.assistant.copilot import ArchiMateCopilot, CopilotReply, CopilotUnavailable
 from archflow.config import Settings
 from archflow.studio.models import ViewProject
@@ -173,6 +176,19 @@ def build_studio_router(
         project = run(lambda: studio.get(project_id))
         return lint_model(project.model)
 
+    @router.get(
+        "/views/{project_id}/preview.svg",
+        summary="A lightweight SVG rendering of the project's first view",
+        response_class=Response,
+    )
+    def preview(project_id: str) -> Response:
+        project = run(lambda: studio.get(project_id))
+        return Response(
+            content=view_to_svg(project.model),
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     @router.post(
         "/views/import",
         response_model=ViewProject,
@@ -201,16 +217,51 @@ def build_studio_router(
         except CopilotUnavailable as err:
             raise HTTPException(status_code=503, detail=str(err)) from err
 
-        context: str | None = None
-        if project.request_id:
-            try:
-                from archflow.assistant.governance import request_brief
-
-                context = request_brief(engine.load(project.request_id))
-            except KeyError:
-                context = None  # request was deleted; the view stands alone
-        reply = copilot.chat(project, payload.message, context=context)
+        reply = copilot.chat(project, payload.message, context=request_context(project))
         studio.save(project)
         return reply
+
+    def request_context(project: ViewProject) -> str | None:
+        """The linked governance request as prompt context (None when absent)."""
+        if not project.request_id:
+            return None
+        try:
+            from archflow.assistant.governance import request_brief
+
+            return request_brief(engine.load(project.request_id))
+        except KeyError:
+            return None  # request was deleted; the view stands alone
+
+    @router.post(
+        "/views/{project_id}/assistant/stream",
+        summary="Copilot chat as server-sent events (per-round progress)",
+        description=(
+            "Emits `round` events while the copilot works (each with that "
+            "round's actions) and one `final` event with the reply. The "
+            "project saves when the stream ends."
+        ),
+    )
+    def assistant_stream(project_id: str, payload: CopilotMessage) -> StreamingResponse:
+        project = run(lambda: studio.get(project_id))
+        try:
+            copilot = make_copilot()
+        except CopilotUnavailable as err:
+            raise HTTPException(status_code=503, detail=str(err)) from err
+        context = request_context(project)
+
+        def events() -> Iterator[str]:
+            try:
+                for event in copilot.chat_stream(project, payload.message, context=context):
+                    yield f"data: {json.dumps(event)}\n\n"
+            except Exception as err:  # noqa: BLE001 - surfaced to the client, not hidden
+                yield f"data: {json.dumps({'type': 'error', 'message': str(err)})}\n\n"
+            finally:
+                studio.save(project)  # persist whatever the loop completed
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return router

@@ -269,6 +269,16 @@ main { padding: 20px; }
 }
 .block-reasons ul { margin: 4px 0 0; padding-left: 18px; }
 
+.gate-panel {
+  border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 14px 12px; margin-top: 12px; background: var(--surface-2);
+}
+.gate-panel h3 { margin-top: 0 !important; }
+.gate-panel.flash { animation: gate-flash 1s ease; }
+@keyframes gate-flash {
+  0%, 60% { border-color: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+}
+
 .timeline { list-style: none; margin: 0; padding: 0; }
 .timeline li {
   position: relative; padding: 0 0 12px 18px; font-size: 12.5px; color: var(--ink-2);
@@ -333,6 +343,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand-soft)
   padding: 16px; cursor: pointer; transition: border-color .12s ease, transform .12s ease;
 }
 .project-card:hover { border-color: var(--brand); transform: translateY(-1px); }
+.project-card .pc-thumb {
+  display: block; width: calc(100% + 32px); height: 120px;
+  margin: -16px -16px 12px; padding: 6px;
+  object-fit: contain; background: #fff;
+  border-bottom: 1px solid var(--line); border-radius: var(--radius) var(--radius) 0 0;
+}
 .project-card .pc-name { font-weight: 600; margin-bottom: 4px; }
 .project-card .pc-meta { color: var(--muted); font-size: 12.5px; }
 .project-card.new {
@@ -366,6 +382,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand-soft)
 .drawio-frame { flex: 1; border: none; width: 100%; background: #fff; }
 .canvas-fallback {
   flex: 1; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 40px;
+}
+.canvas-preview {
+  display: block; max-width: min(720px, 100%); max-height: 55vh; margin: 0 auto 16px;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff;
+}
+.map-preview {
+  display: block; width: 100%; max-height: 300px; object-fit: contain;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 6px;
 }
 
 .copilot { border-left: 1px solid var(--line); display: flex; flex-direction: column; background: var(--surface); }

@@ -296,3 +296,43 @@ def test_copilot_round_cap_saves_progress() -> None:
     assert "tool limit" in reply.reply
     assert reply.model_updated
     assert len(project.model.elements) == 8
+
+
+def test_copilot_chat_stream_yields_round_events() -> None:
+    project = make_project("Stream")
+    scripted = ScriptedMessages(
+        [
+            FakeResponse(
+                content=[
+                    FakeBlock(
+                        type="tool_use",
+                        id="toolu_a",
+                        name="add_elements",
+                        input={"elements": [{"type": "ApplicationComponent", "name": "CRM"}]},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeResponse(
+                content=[
+                    FakeBlock(
+                        type="tool_use", id="toolu_b", name="create_view", input={"name": "V"}
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeResponse(
+                content=[FakeBlock(type="text", text="Done.")], stop_reason="end_turn"
+            ),
+        ]
+    )
+    copilot = ArchiMateCopilot(settings(), messages_client=scripted)
+    events = list(copilot.chat_stream(project, "Model our CRM landscape"))
+
+    assert [e["type"] for e in events] == ["round", "round", "final"]
+    assert events[0]["round"] == 1 and events[0]["actions"], "first round carries its actions"
+    assert events[-1]["reply"] == "Done."
+    assert events[-1]["model_updated"] is True
+    # History persisted exactly as the non-streaming path would.
+    roles = [m["role"] for m in project.assistant_history]
+    assert roles == ["user", "assistant", "user", "assistant", "user", "assistant"]

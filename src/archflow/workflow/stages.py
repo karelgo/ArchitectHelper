@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from pydantic import BaseModel
+
 from archflow.domain.models import (
     ArchitectureRequest,
     ArtifactKind,
@@ -93,6 +95,49 @@ def _peer_review_reasons(request: ArchitectureRequest) -> list[str]:
     if changes_after:
         return ["Changes were requested after the latest approving review"]
     return []
+
+
+class GateCondition(BaseModel):
+    """One thing the current stage's gate checks, with its live state."""
+
+    key: str
+    description: str
+    met: bool
+
+
+def gate_report(request: ArchitectureRequest) -> list[GateCondition]:
+    """Every condition the current gate checks, met or not.
+
+    The UI shows this *before* an advance is attempted, so users see what
+    the gate needs instead of discovering it by trial and error. Must agree
+    with :func:`gate_for` — the checklist part is derived from the same
+    items, the extra branches mirror its rules.
+    """
+    conditions = [
+        GateCondition(key=item.key, description=item.description, met=item.done)
+        for item in request.checklist
+        if item.stage == request.stage
+    ]
+    if request.stage == Stage.PEER_REVIEW:
+        conditions.append(
+            GateCondition(
+                key="review.approved",
+                description="An approving peer review, with no changes requested after it",
+                met=not _peer_review_reasons(request),
+            )
+        )
+    elif request.stage == Stage.BOARD_APPROVAL:
+        conditions.append(
+            GateCondition(
+                key="board.approved",
+                description="A decision approved at the board-approval stage",
+                met=any(
+                    d.status == DecisionStatus.APPROVED and d.stage == Stage.BOARD_APPROVAL
+                    for d in request.decisions
+                ),
+            )
+        )
+    return conditions
 
 
 def gate_for(request: ArchitectureRequest) -> tuple[bool, list[str]]:

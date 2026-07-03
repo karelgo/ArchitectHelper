@@ -20,7 +20,7 @@ import xml.etree.ElementTree as ET
 from archflow.archimate.model import ArchimateModel, View, ViewNode
 
 #: ArchiMate layer fill colours (per the standard's conventional palette).
-_LAYER_FILLS: dict[str, str] = {
+LAYER_FILLS: dict[str, str] = {
     "motivation": "#CCCCFF",
     "strategy": "#F5DEAA",
     "business": "#FFFF99",
@@ -119,7 +119,7 @@ def layer_of(element_type: str) -> str:
 
 
 def _vertex_style(element_type: str) -> str:
-    fill = _LAYER_FILLS[layer_of(element_type)]
+    fill = LAYER_FILLS[layer_of(element_type)]
     return (
         "rounded=1;whiteSpace=wrap;html=1;arcSize=8;"
         f"fillColor={fill};strokeColor=#5B5B5B;fontColor=#1A1A1A;"

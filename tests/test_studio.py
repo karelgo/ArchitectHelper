@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -207,6 +208,42 @@ def test_assistant_route_passes_request_context(
     assert recorded["context"] is None
 
 
+def test_assistant_stream_route_emits_events_and_saves(
+    tmp_path: Path, studio: StudioService
+) -> None:
+    db = create_db_engine(f"sqlite:///{tmp_path}/sse.db")
+    settings = Settings(_env_file=None, artifacts_dir=tmp_path / "artifacts")  # type: ignore[call-arg]
+    engine = WorkflowEngine(
+        repository=RequestRepository(db),
+        events=EventLog(db),
+        actions=ActionRegistry(),
+        settings=settings,
+    )
+
+    class FakeCopilot:
+        def chat_stream(self, project, message, context=None):  # noqa: ANN001, ANN201
+            project.description = "touched by the stream"
+            yield {"type": "round", "round": 1, "actions": ["+1 element(s)"], "model_updated": True}
+            yield {"type": "final", "reply": "done", "actions": ["+1 element(s)"], "model_updated": True}
+
+    factory = cast("Callable[[], ArchiMateCopilot]", FakeCopilot)
+    test_client = TestClient(create_app(engine, studio=studio, copilot_factory=factory))
+    project_id = test_client.post("/studio/views", json={"name": "S"}).json()["id"]
+
+    response = test_client.post(
+        f"/studio/views/{project_id}/assistant/stream", json={"message": "hi"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = [
+        json.loads(line[6:]) for line in response.text.split("\n") if line.startswith("data: ")
+    ]
+    assert [e["type"] for e in events] == ["round", "final"]
+    assert events[1]["reply"] == "done"
+    # The finally-block persisted the mutated project.
+    assert studio.get(project_id).description == "touched by the stream"
+
+
 def test_ui_config_and_index_redirect(client: TestClient) -> None:
     config = client.get("/ui-config").json()
     assert config["drawio_embed_url"].startswith("https://")
@@ -263,3 +300,18 @@ def test_exchange_download_with_non_ascii_name(client: TestClient) -> None:
     response = client.get(f"/studio/views/{project_id}/exchange")
     assert response.status_code == 200
     assert "archimate.xml" in response.headers["content-disposition"]
+
+
+def test_preview_svg_route(client: TestClient, studio: StudioService) -> None:
+    project = studio.create("Previewable", "")
+    project.model.add_element("Capability", "Pay")
+    project.bump_model()
+    studio.save(project)
+
+    response = client.get(f"/studio/views/{project.id}/preview.svg")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    # No view laid out yet: the placeholder still renders as valid SVG.
+    assert "<svg" in response.text and "No view yet" in response.text
+
+    assert client.get("/studio/views/nope/preview.svg").status_code == 404

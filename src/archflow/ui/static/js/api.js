@@ -27,6 +27,7 @@ export const api = {
   getRequest: (id) => request('GET', `/requests/${id}`),
   createRequest: (payload) => request('POST', '/requests', payload),
   advance: (id) => request('POST', `/requests/${id}/advance`, { actor: 'ui' }),
+  gate: (id) => request('GET', `/requests/${id}/gate`),
   triage: (id, payload) => request('POST', `/requests/${id}/triage`, payload),
   addStakeholder: (id, payload) => request('POST', `/requests/${id}/stakeholders`, payload),
   review: (id, payload) => request('POST', `/requests/${id}/reviews`, payload),
@@ -44,8 +45,42 @@ export const api = {
   putDrawio: (id, xml) => request('PUT', `/studio/views/${id}/drawio`, { xml }),
   importExchange: (payload) => request('POST', '/studio/views/import', payload),
   copilot: (id, message) => request('POST', `/studio/views/${id}/assistant`, { message }),
+  // Streaming variant: calls onEvent per SSE event ({type: 'round'|'final'|'error'}).
+  copilotStream: async (id, message, onEvent, signal) => {
+    const response = await fetch(`/studio/views/${id}/assistant/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+      signal,
+    });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try { detail = (await response.json()).detail || detail; } catch { /* not json */ }
+      const error = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+      error.status = response.status;
+      throw error;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+        const chunk = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('data: ')) onEvent(JSON.parse(line.slice(6)));
+        }
+      }
+    }
+  },
   lint: (id) => request('GET', `/studio/views/${id}/lint`),
   exchangeUrl: (id) => `/studio/views/${id}/exchange`,
+  previewUrl: (id, rev) => `/studio/views/${id}/preview.svg?rev=${encodeURIComponent(rev || '')}`,
+  mapUrl: (id, rev) => `/requests/${id}/map.svg?rev=${encodeURIComponent(rev || '')}`,
 
   // Governance assistants (drafts only — humans apply)
   aiStakeholders: (id) => request('POST', `/requests/${id}/assistant/stakeholders`),
