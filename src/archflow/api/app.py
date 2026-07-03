@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import archflow
+from archflow.api.assistant import build_assistant_router
 from archflow.api.schemas import (
     AdvanceIn,
     CompleteIn,
@@ -31,6 +32,7 @@ from archflow.api.schemas import (
 )
 from archflow.api.studio import build_studio_router
 from archflow.assistant.copilot import ArchiMateCopilot
+from archflow.assistant.governance import GovernanceAssistant
 from archflow.config import get_settings
 from archflow.domain.events import Event
 from archflow.domain.models import ArchitectureRequest, Stakeholder
@@ -56,6 +58,7 @@ def create_app(
     engine: WorkflowEngine | None = None,
     studio: StudioService | None = None,
     copilot_factory: Callable[[], ArchiMateCopilot] | None = None,
+    assistant_factory: Callable[[], GovernanceAssistant] | None = None,
 ) -> FastAPI:
     """Build the ArchFlow REST API + Studio + web UI around a workflow engine."""
     app = FastAPI(
@@ -243,6 +246,7 @@ def create_app(
         )
 
     app.include_router(build_studio_router(studio, wf, settings, copilot_factory))
+    app.include_router(build_assistant_router(wf, settings, assistant_factory))
 
     static_dir = resources.files("archflow.ui") / "static"
     app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="ui")

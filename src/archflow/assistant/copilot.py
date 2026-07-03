@@ -31,7 +31,10 @@ Working method:
 3. Build incrementally with the tools: add elements, wire relationships, then
    call create_view so the user sees the diagram. Always finish a modeling
    round with create_view — without it the canvas does not update.
-4. Close each reply with a short summary of what changed and a concrete
+4. Quality-check yourself: after building or changing the model, call
+   lint_model and fix every error it reports (warnings: fix or explain why
+   they are intentional) before replying.
+5. Close each reply with a short summary of what changed and a concrete
    suggestion for the next step (e.g. "shall we add the technology layer?").
 
 Rules:
@@ -117,11 +120,28 @@ class ArchiMateCopilot:
         self._settings = settings
         self._messages = messages_client or _default_messages_client(settings)
 
-    def chat(self, project: ViewProject, user_message: str) -> CopilotReply:
-        """One user turn: runs the tool loop and persists history on the project."""
+    def chat(
+        self, project: ViewProject, user_message: str, context: str | None = None
+    ) -> CopilotReply:
+        """One user turn: runs the tool loop and persists history on the project.
+
+        ``context`` (e.g. the linked governance request) rides as an extra
+        system block after the cached prompt, so it never pollutes history.
+        """
         executor = ToolExecutor(project)
         messages: list[dict[str, Any]] = [*project.assistant_history]
         messages.append({"role": "user", "content": user_message})
+
+        system: list[dict[str, Any]] = [
+            {"type": "text", "text": _SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
+        ]
+        if context:
+            system.append(
+                {
+                    "type": "text",
+                    "text": f"Context — this view belongs to a governance request:\n{context}",
+                }
+            )
 
         reply_text = ""
         for _ in range(_MAX_ROUNDS):
@@ -129,13 +149,7 @@ class ArchiMateCopilot:
                 model=self._settings.assistant_model,
                 max_tokens=16000,
                 thinking={"type": "adaptive"},
-                system=[
-                    {
-                        "type": "text",
-                        "text": _SYSTEM_PROMPT,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
+                system=system,
                 tools=TOOLS,
                 messages=messages,
             )

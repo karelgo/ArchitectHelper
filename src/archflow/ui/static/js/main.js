@@ -27,7 +27,7 @@ async function route() {
     await renderStudioList(root);
   } else {
     setActiveNav('board');
-    await renderBoard(root);
+    await renderBoard(root, config);
   }
 }
 

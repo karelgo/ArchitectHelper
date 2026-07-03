@@ -13,7 +13,10 @@ const STAGE_LABELS = {
   publication: 'Publication', done: 'Done', rejected: 'Rejected',
 };
 
-export async function renderBoard(root) {
+let assistantOn = false; // set from /ui-config; gates the AI-assist buttons
+
+export async function renderBoard(root, config = {}) {
+  assistantOn = Boolean(config.assistant_available);
   root.innerHTML = '';
   let requests;
   try {
@@ -130,6 +133,29 @@ export async function openRequestDrawer(requestId, root) {
 
   body.append(actionRow, blockBox);
 
+  // --- AI assist (drafts only — the human applies/records) --------------------
+  if (assistantOn && !terminal) {
+    const aiRow = el('div', { class: 'inline-form' });
+    if (['intake', 'triage', 'stakeholder_analysis'].includes(request.stage)) {
+      aiRow.append(aiButton('✨ Draft stakeholder analysis', async () => {
+        const proposal = await api.aiStakeholders(requestId);
+        proposalModal(request, proposal, refresh);
+      }));
+    }
+    if (['stakeholder_analysis', 'drafting', 'peer_review'].includes(request.stage)) {
+      aiRow.append(aiButton('✨ Draft PSA', async () => {
+        const draft = await api.aiPsa(requestId);
+        psaModal(request, draft.markdown, refresh);
+      }));
+    }
+    if (['peer_review', 'board_approval'].includes(request.stage)) {
+      aiRow.append(aiButton('✨ AI pre-review', async () => {
+        reviewModal(await api.aiReview(requestId));
+      }));
+    }
+    if (aiRow.childElementCount) body.append(el('h3', {}, 'AI assist'), aiRow);
+  }
+
   // --- stage-specific forms ---------------------------------------------------
   if (request.stage === 'triage') {
     body.append(el('h3', {}, 'Triage'), triageForm(request, refresh));
@@ -199,6 +225,107 @@ export async function openRequestDrawer(requestId, root) {
       ),
     ),
     body,
+  ));
+}
+
+// A button that shows a busy state while its (slow, LLM-backed) action runs.
+function aiButton(label, action) {
+  const button = el('button', { class: 'btn' }, label);
+  button.onclick = async () => {
+    button.disabled = true;
+    button.textContent = '✨ Thinking…';
+    try {
+      await action();
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  };
+  return button;
+}
+
+function proposalModal(request, proposal, refresh) {
+  const picks = []; // { box, kind, item } — unchecked items are not applied
+  const section = (title, items, kind, describe) => {
+    if (!items.length) return null;
+    const rows = items.map((item) => {
+      const box = el('input', { type: 'checkbox', checked: '' });
+      picks.push({ box, kind, item });
+      return el('label', { class: 'item-row', style: 'cursor:pointer' },
+        el('span', {}, box, ' ', describe(item)),
+      );
+    });
+    return el('div', {}, el('h3', {}, title), ...rows);
+  };
+
+  const close = openModal(el('div', {},
+    el('h2', {}, 'Proposed stakeholder analysis'),
+    el('div', { class: 'hint' },
+      'A draft, not a decision: untick anything that does not belong, then apply.'),
+    section('Stakeholders', proposal.stakeholders, 'stakeholders', (s) =>
+      `${s.name}${s.role ? ` — ${s.role}` : ''} (influence ${s.influence}, interest ${s.interest}, ${s.attitude})` +
+      `${s.concerns.length ? ` · ${s.concerns.join(', ')}` : ''}`),
+    section('Drivers', proposal.drivers, 'drivers', (d) => d.name),
+    section('Goals', proposal.goals, 'goals', (g) => g.name),
+    section('Assessments', proposal.assessments, 'assessments', (a) => a.name),
+    proposal.notes ? el('div', { class: 'hint' }, `Assistant notes: ${proposal.notes}`) : null,
+    el('div', { class: 'modal-actions' },
+      el('button', { class: 'btn', onclick: () => close() }, 'Discard'),
+      el('button', {
+        class: 'btn btn-primary', onclick: async () => {
+          const filtered = { stakeholders: [], drivers: [], goals: [], assessments: [] };
+          for (const { box, kind, item } of picks) if (box.checked) filtered[kind].push(item);
+          try {
+            const added = await api.aiApplyStakeholders(request.id, filtered);
+            toast(`Applied: +${added.stakeholders} stakeholders, +${added.drivers} drivers, ` +
+              `+${added.goals} goals, +${added.assessments} assessments`);
+            close(); refresh();
+          } catch (error) { toast(error.message, 'error'); }
+        },
+      }, 'Apply selection'),
+    ),
+  ));
+}
+
+function psaModal(request, markdown, refresh) {
+  const close = openModal(el('div', {},
+    el('h2', {}, 'PSA draft'),
+    el('pre', { class: 'psa-preview' }, markdown),
+    el('div', { class: 'modal-actions' },
+      el('button', { class: 'btn', onclick: () => close() }, 'Discard'),
+      el('button', {
+        class: 'btn btn-primary', onclick: async () => {
+          try {
+            const saved = await api.aiPsa(request.id, { save: true, markdown });
+            toast(`PSA saved to ${saved.saved_path}`);
+            close(); refresh();
+          } catch (error) { toast(error.message, 'error'); }
+        },
+      }, 'Save as PSA artifact'),
+    ),
+  ));
+}
+
+function reviewModal(draft) {
+  const chip = draft.suggested_verdict === 'approve' ? 'chip-small' : 'chip-large';
+  const severityChip = { blocking: 'chip-large', major: 'chip-medium', minor: 'chip-small' };
+  const close = openModal(el('div', {},
+    el('h2', {}, 'AI pre-review'),
+    el('div', { class: 'hint' },
+      'Advisory only — nothing is recorded. Use the "Record review" form for the real verdict.'),
+    el('p', {},
+      el('span', { class: `chip ${chip}` }, draft.suggested_verdict.replaceAll('_', ' ')),
+      ` ${draft.summary}`),
+    ...draft.findings.map((finding) => el('div', { class: 'item-row' },
+      el('span', {}, finding.message),
+      el('span', { class: `chip ${severityChip[finding.severity] || 'chip-medium'}` },
+        `${finding.severity}${finding.area ? ` · ${finding.area}` : ''}`),
+    )),
+    el('div', { class: 'modal-actions' },
+      el('button', { class: 'btn', onclick: () => close() }, 'Close'),
+    ),
   ));
 }
 

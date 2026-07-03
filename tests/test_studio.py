@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
 
 from archflow.api.app import create_app
 from archflow.archimate.openexchange import read_model
+from archflow.assistant.copilot import ArchiMateCopilot, CopilotReply
 from archflow.config import Settings, get_settings
 from archflow.domain.models import Stakeholder
 from archflow.storage import EventLog, RequestRepository, ViewProjectRepository, create_db_engine
@@ -167,6 +170,43 @@ def test_assistant_route_503_without_key(client: TestClient) -> None:
     assert "ARCHFLOW_ANTHROPIC_API_KEY" in response.json()["detail"]
 
 
+def test_assistant_route_passes_request_context(
+    tmp_path: Path, studio: StudioService
+) -> None:
+    """A view linked to a request gets the request brief as copilot context."""
+    db = create_db_engine(f"sqlite:///{tmp_path}/ctx.db")
+    settings = Settings(_env_file=None, artifacts_dir=tmp_path / "artifacts")  # type: ignore[call-arg]
+    engine = WorkflowEngine(
+        repository=RequestRepository(db),
+        events=EventLog(db),
+        actions=ActionRegistry(),
+        settings=settings,
+    )
+    request = engine.create_request("CRM renewal", description="d", requester="r")
+
+    recorded: dict[str, str | None] = {}
+
+    class FakeCopilot:
+        def chat(
+            self, project: object, message: str, context: str | None = None
+        ) -> CopilotReply:
+            recorded["context"] = context
+            return CopilotReply(reply="ok")
+
+    factory = cast("Callable[[], ArchiMateCopilot]", FakeCopilot)
+    test_client = TestClient(create_app(engine, studio=studio, copilot_factory=factory))
+
+    linked = test_client.post(
+        "/studio/views", json={"name": "", "request_id": request.id}
+    ).json()
+    test_client.post(f"/studio/views/{linked['id']}/assistant", json={"message": "hi"})
+    assert recorded["context"] is not None and "CRM renewal" in recorded["context"]
+
+    plain = test_client.post("/studio/views", json={"name": "Standalone"}).json()
+    test_client.post(f"/studio/views/{plain['id']}/assistant", json={"message": "hi"})
+    assert recorded["context"] is None
+
+
 def test_ui_config_and_index_redirect(client: TestClient) -> None:
     config = client.get("/ui-config").json()
     assert config["drawio_embed_url"].startswith("https://")
@@ -195,6 +235,24 @@ def test_request_seed_requires_engine_visibility(
     project = studio.create_from_request("", engine.load(request.id))
     names = {e.name for e in project.model.elements}
     assert "Zoe" in names and "risk" in names
+
+
+def test_route_lint_reports_findings(client: TestClient, studio: StudioService) -> None:
+    project = studio.create("Lint me", "")
+    actor = project.model.add_element("BusinessActor", "Alice")
+    driver = project.model.add_element("Driver", "Cost pressure")
+    # Realization pointing at a Driver is illegal — the linter must flag it.
+    project.model.add_relationship("Realization", actor.id, driver.id)
+    project.bump_model()
+    studio.save(project)
+
+    response = client.get(f"/studio/views/{project.id}/lint")
+    assert response.status_code == 200
+    rules = {finding["rule"] for finding in response.json()}
+    assert "unrealizable-target" in rules
+    assert response.json()[0]["severity"] == "error", "errors come first"
+
+    assert client.get("/studio/views/nope/lint").status_code == 404
 
 
 def test_exchange_download_with_non_ascii_name(client: TestClient) -> None:

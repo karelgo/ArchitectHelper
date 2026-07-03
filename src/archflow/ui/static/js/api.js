@@ -44,5 +44,13 @@ export const api = {
   putDrawio: (id, xml) => request('PUT', `/studio/views/${id}/drawio`, { xml }),
   importExchange: (payload) => request('POST', '/studio/views/import', payload),
   copilot: (id, message) => request('POST', `/studio/views/${id}/assistant`, { message }),
+  lint: (id) => request('GET', `/studio/views/${id}/lint`),
   exchangeUrl: (id) => `/studio/views/${id}/exchange`,
+
+  // Governance assistants (drafts only — humans apply)
+  aiStakeholders: (id) => request('POST', `/requests/${id}/assistant/stakeholders`),
+  aiApplyStakeholders: (id, proposal, actor = 'ui') =>
+    request('POST', `/requests/${id}/assistant/stakeholders/apply`, { proposal, actor }),
+  aiPsa: (id, body = {}) => request('POST', `/requests/${id}/assistant/psa`, body),
+  aiReview: (id) => request('POST', `/requests/${id}/assistant/review`),
 };

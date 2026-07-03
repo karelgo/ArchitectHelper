@@ -178,3 +178,35 @@ def test_manual_publish_lands_on_audit_trail() -> None:
     assert "artifact_generated" in events.output
     shown = runner.invoke(app, ["show", request_id])
     assert "archimate_export" in shown.output
+
+
+def test_ai_commands_require_key() -> None:
+    request_id = create_request()
+    result = runner.invoke(app, ["ai", "review", request_id])
+    assert result.exit_code == 1
+    assert "ARCHFLOW_ANTHROPIC_API_KEY" in result.output
+
+
+def test_ai_stakeholders_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    from archflow.assistant.governance import ProposedStakeholder, StakeholderProposal
+
+    request_id = create_request()
+    proposal = StakeholderProposal(
+        stakeholders=[
+            ProposedStakeholder(name="Works council", role="Consultation"),
+            ProposedStakeholder(name="Alice", role="dup — must be skipped"),
+        ],
+    )
+
+    class FakeAssistant:
+        def draft_stakeholder_analysis(self, request: object) -> StakeholderProposal:
+            return proposal
+
+    monkeypatch.setattr("archflow.cli._assistant", lambda: FakeAssistant())
+    result = runner.invoke(app, ["ai", "stakeholders", request_id, "--apply"])
+    assert result.exit_code == 0, result.output
+    assert "Works council" in result.output
+
+    shown = runner.invoke(app, ["show", request_id])
+    assert "Works council" in shown.output
+    assert "dup — must be skipped" not in shown.output, "duplicate name must not be re-added"

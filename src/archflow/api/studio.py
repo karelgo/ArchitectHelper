@@ -8,6 +8,7 @@ from typing import TypeVar
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
+from archflow.archimate.lint import LintFinding, lint_model
 from archflow.assistant.copilot import ArchiMateCopilot, CopilotReply, CopilotUnavailable
 from archflow.config import Settings
 from archflow.studio.models import ViewProject
@@ -158,6 +159,20 @@ def build_studio_router(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
+    @router.get(
+        "/views/{project_id}/lint",
+        response_model=list[LintFinding],
+        summary="Lint the project's ArchiMate model",
+        description=(
+            "Semantic checks (illegal relationship endpoints, unrealizable "
+            "targets, cross-layer structure) and structural checks (dangling "
+            "references, duplicates, orphans), most severe first."
+        ),
+    )
+    def lint(project_id: str) -> list[LintFinding]:
+        project = run(lambda: studio.get(project_id))
+        return lint_model(project.model)
+
     @router.post(
         "/views/import",
         response_model=ViewProject,
@@ -185,7 +200,16 @@ def build_studio_router(
             copilot = make_copilot()
         except CopilotUnavailable as err:
             raise HTTPException(status_code=503, detail=str(err)) from err
-        reply = copilot.chat(project, payload.message)
+
+        context: str | None = None
+        if project.request_id:
+            try:
+                from archflow.assistant.governance import request_brief
+
+                context = request_brief(engine.load(project.request_id))
+            except KeyError:
+                context = None  # request was deleted; the view stands alone
+        reply = copilot.chat(project, payload.message, context=context)
         studio.save(project)
         return reply
 

@@ -65,13 +65,17 @@ Prefer HTTP? `archflow serve` starts a REST API with interactive docs at
 - **Governance** — the pipeline as a kanban with a gate-aware request
   drawer: advance stages, see exactly what blocks a gate, record triage,
   stakeholders, reviews and decisions, browse artifacts and the audit
-  timeline.
+  timeline. With an API key set, stage-matched **AI assist** buttons draft
+  the stakeholder analysis, the PSA prose and a pre-review — always as
+  proposals a human filters and applies, never auto-recorded.
 - **Studio** — an ArchiMate view designer with the **draw.io editor
   embedded** (diagrams render with proper layer colours and relationship
-  notations; your layout edits sync back) and an **AI copilot** that builds
-  views from A to Z: describe the system, it models elements per layer,
-  wires semantically correct relationships and lays out the view live on
-  the canvas. Set `ARCHFLOW_ANTHROPIC_API_KEY` to enable the copilot.
+  notations; your layout edits sync back), an **ArchiMate linter** (a
+  problems panel flags illegal relationships, dangling references and more)
+  and an **AI copilot** that builds views from A to Z: describe the system,
+  it models elements per layer, wires semantically correct relationships,
+  lints its own work and lays out the view live on the canvas. Set
+  `ARCHFLOW_ANTHROPIC_API_KEY` to enable the copilot.
 
 Details: [docs/studio.md](docs/studio.md).
 

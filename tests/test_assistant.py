@@ -256,6 +256,28 @@ def test_copilot_second_turn_replays_history() -> None:
     assert len(sent) == 3  # prior user + assistant, then the new user turn
 
 
+def test_copilot_context_rides_as_extra_system_block() -> None:
+    project = make_project("Ctx")
+    scripted = ScriptedMessages(
+        [FakeResponse(content=[FakeBlock(type="text", text="ok")], stop_reason="end_turn")]
+    )
+    copilot = ArchiMateCopilot(settings(), messages_client=scripted)
+    copilot.chat(project, "hi", context="Title: CRM renewal")
+
+    system = scripted.requests[0]["system"]
+    assert len(system) == 2
+    assert system[0]["cache_control"] == {"type": "ephemeral"}, "base prompt stays cached"
+    assert "CRM renewal" in system[1]["text"]
+    assert "cache_control" not in system[1], "per-request context must not be cached"
+
+    # Without context there is exactly the base system block.
+    plain = ScriptedMessages(
+        [FakeResponse(content=[FakeBlock(type="text", text="ok")], stop_reason="end_turn")]
+    )
+    ArchiMateCopilot(settings(), messages_client=plain).chat(project, "hi again")
+    assert len(plain.requests[0]["system"]) == 1
+
+
 def test_copilot_round_cap_saves_progress() -> None:
     project = make_project("Cap")
     tool_response = FakeResponse(

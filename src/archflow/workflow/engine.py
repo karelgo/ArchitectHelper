@@ -12,9 +12,12 @@ from archflow.domain.models import (
     PIPELINE,
     ArchitectureRequest,
     Artifact,
+    Assessment,
     Classification,
     Decision,
     DecisionStatus,
+    Driver,
+    Goal,
     Review,
     ReviewVerdict,
     Stage,
@@ -311,6 +314,69 @@ class WorkflowEngine:
             request_id,
             EventType.STAKEHOLDER_ADDED,
             payload={"name": stakeholder.name, "role": stakeholder.role},
+        )
+        return request
+
+    def apply_analysis(
+        self,
+        request_id: str,
+        stakeholders: list[Stakeholder] | None = None,
+        drivers: list[Driver] | None = None,
+        goals: list[Goal] | None = None,
+        assessments: list[Assessment] | None = None,
+        actor: str = "assistant",
+    ) -> ArchitectureRequest:
+        """Apply a (human-approved) stakeholder-analysis proposal in one step.
+
+        Additions are deduplicated by name against what the request already
+        holds. Same stage guard as :meth:`add_stakeholder`.
+
+        Raises:
+            GuardViolation: Once the request is past stakeholder analysis.
+        """
+        request = self._load(request_id)
+        allowed = (Stage.INTAKE, Stage.TRIAGE, Stage.STAKEHOLDER_ANALYSIS)
+        if request.stage not in allowed:
+            raise GuardViolation(
+                "Stakeholder analysis can only change up to and including the "
+                f"stakeholder-analysis stage; the request is in '{request.stage.value}'."
+            )
+
+        def fresh(items: list, existing_names: set[str]) -> list:
+            added = []
+            for item in items:
+                key = item.name.strip().casefold()
+                if key and key not in existing_names:
+                    existing_names.add(key)
+                    added.append(item)
+            return added
+
+        added_stakeholders = fresh(
+            stakeholders or [], {s.name.strip().casefold() for s in request.stakeholders}
+        )
+        added_drivers = fresh(drivers or [], {d.name.strip().casefold() for d in request.drivers})
+        added_goals = fresh(goals or [], {g.name.strip().casefold() for g in request.goals})
+        added_assessments = fresh(
+            assessments or [], {a.name.strip().casefold() for a in request.assessments}
+        )
+
+        request.stakeholders.extend(added_stakeholders)
+        request.drivers.extend(added_drivers)
+        request.goals.extend(added_goals)
+        request.assessments.extend(added_assessments)
+        auto_complete(request)
+        request.touch()
+        self._repo.save(request)
+        self._emit(
+            request_id,
+            EventType.ANALYSIS_APPLIED,
+            actor=actor,
+            payload={
+                "stakeholders": len(added_stakeholders),
+                "drivers": len(added_drivers),
+                "goals": len(added_goals),
+                "assessments": len(added_assessments),
+            },
         )
         return request
 

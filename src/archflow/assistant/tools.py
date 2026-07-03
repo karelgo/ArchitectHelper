@@ -126,6 +126,16 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "lint_model",
+        "description": (
+            "Check the model for ArchiMate mistakes: illegal relationship "
+            "endpoints, unrealizable targets, cross-layer structure, dangling "
+            "references, duplicates and orphans. Call this after building or "
+            "changing the model, and fix every error it reports."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
 ]
 
 
@@ -302,6 +312,22 @@ class ToolExecutor:
         self._mark_changed(f"view '{name}' rebuilt")
         return json.dumps(
             {"view": name, "nodes": len(view.nodes), "connections": len(view.connections)}
+        )
+
+    def _tool_lint_model(self, _: dict[str, Any]) -> str:
+        from archflow.archimate.lint import lint_model, summarize
+
+        findings = lint_model(self.project.model)
+        if not findings:
+            return json.dumps({"status": "clean", "findings": []})
+        return json.dumps(
+            {
+                "status": summarize(findings),
+                "findings": [
+                    {"rule": f.rule, "severity": f.severity.value, "message": f.message}
+                    for f in findings
+                ],
+            }
         )
 
     def _tool_rename_model(self, tool_input: dict[str, Any]) -> str:

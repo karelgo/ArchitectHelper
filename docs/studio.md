@@ -12,12 +12,40 @@ forms that appear only in the stages where they're valid, artifacts,
 checklist and the full audit timeline. **New request** registers an intake
 with stakeholders in `Name : Role : concern | concern` format.
 
+### AI assist in the drawer
+
+With an API key configured, the drawer offers stage-matched draft buttons.
+Every output is a *draft a human disposes of* — the assistant never advances
+a stage, records a verdict, or mutates the request on its own:
+
+- **Draft stakeholder analysis** (intake → stakeholder analysis): proposes
+  stakeholders with influence/interest/attitude plus drivers, goals and
+  assessments. You untick what doesn't belong and apply the rest; duplicates
+  (by name) are skipped, and the application is audited as
+  `analysis_applied`.
+- **Draft PSA** (stakeholder analysis → peer review): drafts the Project
+  Start Architecture prose, improving on the template-generated document if
+  one exists. Preview first; saving records it as the request's PSA artifact
+  exactly as previewed (no regeneration).
+- **AI pre-review** (peer review / board approval): a critical read of the
+  PSA and stakeholder analysis with severity-tagged findings and a suggested
+  verdict. Display-only: the real verdict goes through the *Record review*
+  form.
+
+The same drafts are available from the CLI (`archflow ai stakeholders|psa|
+review`) and REST (`POST /requests/{id}/assistant/*`, 503 without a key).
+
 ## Studio
 
 A three-pane ArchiMate view designer:
 
 - **Left — model outline**: elements grouped by layer with the standard
-  ArchiMate layer colours, plus relationship/view counts.
+  ArchiMate layer colours, plus relationship/view counts — and a **Problems**
+  panel driven by the ArchiMate linter (`GET /studio/views/{id}/lint`):
+  semantic checks (illegal relationship endpoints such as Influence into
+  non-motivation elements or realizing a Stakeholder, cross-layer
+  composition) and structural ones (dangling references, duplicate names,
+  orphans), errors first. One click sends the findings to the copilot to fix.
 - **Center — draw.io**: the real diagrams.net editor embedded via its
   official postMessage protocol. The canonical ArchiMate model renders as a
   draw.io diagram (layer fills, correct relationship notations); edits
@@ -45,11 +73,15 @@ Open Exchange file.
 
 Each chat turn runs a tool-use loop server-side (`POST
 /studio/views/{id}/assistant`): Claude calls `get_model`, `add_elements`,
-`add_relationships`, `remove_elements`, `create_view` and `rename_model`
-against the project's canonical model. Validation failures are fed back as
-tool results so it self-corrects; every mutation bumps the model revision so
-the diagram re-renders (your manual layout survives via the synced view).
-Conversation history persists on the project.
+`add_relationships`, `remove_elements`, `create_view`, `rename_model` and
+`lint_model` against the project's canonical model. Validation failures are
+fed back as tool results so it self-corrects, and it lints its own work
+before replying; every mutation bumps the model revision so the diagram
+re-renders (your manual layout survives via the synced view). Conversation
+history persists on the project. When the project was seeded from a
+governance request, the request brief (goal, stakeholders, decisions) rides
+along as extra system context, so the copilot models with the actual
+concerns in view.
 
 ## Notes
 

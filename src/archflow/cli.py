@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, TypeVar
+from typing import TYPE_CHECKING, Annotated, TypeVar
 
 import typer
 
@@ -22,6 +22,9 @@ from archflow.domain.models import (
 )
 from archflow.workflow.engine import GuardViolation, WorkflowEngine, build_default_engine
 
+if TYPE_CHECKING:
+    from archflow.assistant.governance import GovernanceAssistant
+
 T = TypeVar("T")
 
 app = typer.Typer(
@@ -29,6 +32,11 @@ app = typer.Typer(
     help="Automate the architecture governance process, from intake to Horizzon publication.",
     no_args_is_help=True,
 )
+ai_app = typer.Typer(
+    help="AI drafts for governance stages — a human applies or records every outcome.",
+    no_args_is_help=True,
+)
+app.add_typer(ai_app, name="ai")
 
 
 def _engine() -> WorkflowEngine:
@@ -311,6 +319,109 @@ def publish(
         _run(lambda: engine.record_artifact(request_id, artifact, actor="cli"))
     color = typer.colors.GREEN if result.mode == "api" else typer.colors.YELLOW
     typer.secho(f"[{result.mode}] {result.detail}", fg=color)
+
+
+def _assistant() -> GovernanceAssistant:
+    from archflow.assistant.copilot import CopilotUnavailable
+    from archflow.assistant.governance import GovernanceAssistant
+
+    try:
+        return GovernanceAssistant(get_settings())
+    except CopilotUnavailable as err:
+        _fail(str(err))
+    raise AssertionError("unreachable")  # _fail always raises
+
+
+@ai_app.command("stakeholders")
+def ai_stakeholders(
+    request_id: str,
+    apply: Annotated[
+        bool, typer.Option(help="Apply the whole proposal (default: just print it)")
+    ] = False,
+    actor: Annotated[str, typer.Option(help="Who applies the proposal")] = "cli",
+) -> None:
+    """Draft a stakeholder analysis; --apply to accept it wholesale."""
+    from archflow.assistant.governance import proposal_to_domain
+
+    engine = _engine()
+    request = _run(lambda: engine.load(request_id))
+    proposal = _assistant().draft_stakeholder_analysis(request)
+
+    typer.secho("Proposed stakeholder analysis:", bold=True)
+    for s in proposal.stakeholders:
+        concerns = f" — concerns: {', '.join(s.concerns)}" if s.concerns else ""
+        typer.echo(
+            f"  - {s.name} ({s.role or 'role unknown'}){concerns} "
+            f"[influence {s.influence.value}, interest {s.interest.value}, {s.attitude.value}]"
+        )
+    for label, items in (
+        ("drivers", proposal.drivers),
+        ("goals", proposal.goals),
+        ("assessments", proposal.assessments),
+    ):
+        if items:
+            typer.echo(f"  {label}: " + "; ".join(item.name for item in items))
+    if proposal.notes:
+        typer.echo(f"  notes: {proposal.notes}")
+
+    if apply:
+        stakeholders, drivers, goals, assessments = proposal_to_domain(proposal)
+        _run(
+            lambda: engine.apply_analysis(
+                request_id,
+                stakeholders=stakeholders,
+                drivers=drivers,
+                goals=goals,
+                assessments=assessments,
+                actor=actor,
+            )
+        )
+        typer.secho("Proposal applied (new names only; duplicates skipped).", fg=typer.colors.GREEN)
+    else:
+        typer.echo("Re-run with --apply to accept, or cherry-pick in the web UI.")
+
+
+@ai_app.command("psa")
+def ai_psa(
+    request_id: str,
+    save: Annotated[
+        bool, typer.Option(help="Record the draft as the request's PSA artifact")
+    ] = False,
+    out: Annotated[Path | None, typer.Option(help="Also write the draft to this file")] = None,
+) -> None:
+    """Draft the PSA prose (prints to stdout unless --save/--out)."""
+    from archflow.assistant.governance import existing_psa_text, save_psa_draft
+
+    engine = _engine()
+    request = _run(lambda: engine.load(request_id))
+    generated = _assistant().draft_psa(request, current_psa=existing_psa_text(request))
+    markdown = f"# Project Start Architecture: {request.title}\n\n{generated}"
+
+    if out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(markdown, encoding="utf-8")
+        typer.secho(f"Draft written to {out}", fg=typer.colors.GREEN)
+    if save:
+        path = _run(lambda: save_psa_draft(engine, get_settings(), request, markdown, actor="cli"))
+        typer.secho(f"Saved as PSA artifact: {path}", fg=typer.colors.GREEN)
+    if not out and not save:
+        typer.echo(markdown)
+
+
+@ai_app.command("review")
+def ai_review(request_id: str) -> None:
+    """Draft a peer review (advisory — record the real verdict with `archflow review`)."""
+    engine = _engine()
+    request = _run(lambda: engine.load(request_id))
+    from archflow.assistant.governance import existing_psa_text
+
+    draft = _assistant().pre_review(request, psa_text=existing_psa_text(request))
+    color = typer.colors.GREEN if draft.suggested_verdict == ReviewVerdict.APPROVE else typer.colors.YELLOW
+    typer.secho(f"Suggested verdict: {draft.suggested_verdict.value}", fg=color, bold=True)
+    typer.echo(draft.summary)
+    for finding in draft.findings:
+        typer.echo(f"  [{finding.severity}] ({finding.area or 'general'}) {finding.message}")
+    typer.echo("Advisory only — record the real verdict with: archflow review " + request_id)
 
 
 @app.command()

@@ -141,18 +141,47 @@ export async function renderStudioEditor(root, projectId, config) {
   const copilot = buildCopilotPanel(project, config, {
     onModelUpdated: async () => {
       await editor.reload();
-      renderOutline(outline, await api.getProject(projectId));
+      renderOutline(outline, await api.getProject(projectId), copilot.sendMessage);
     },
   });
 
-  const shell = el('div', { class: 'studio' }, outline, canvasHost, copilot);
+  const shell = el('div', { class: 'studio' }, outline, canvasHost, copilot.panel);
   root.append(shell);
-  renderOutline(outline, project);
+  renderOutline(outline, project, copilot.sendMessage);
   editor.load();
 }
 
-function renderOutline(outlineRoot, project) {
+async function renderOutline(outlineRoot, project, sendToCopilot) {
   outlineRoot.innerHTML = '';
+
+  // Problems panel: lint findings with a one-click hand-off to the copilot.
+  try {
+    const findings = await api.lint(project.id);
+    const problems = el('div', { class: 'outline-layer' });
+    problems.append(el('h3', {}, `Problems (${findings.length})`));
+    if (!findings.length) {
+      problems.append(el('div', { class: 'empty-note' }, '✓ No ArchiMate issues found'));
+    } else {
+      const icons = { error: '⛔', warning: '⚠️', info: 'ℹ️' };
+      for (const finding of findings.slice(0, 12)) {
+        problems.append(el('div', { class: 'outline-el', title: finding.rule },
+          `${icons[finding.severity] || ''} ${finding.message}`));
+      }
+      if (findings.length > 12) {
+        problems.append(el('div', { class: 'empty-note' }, `…and ${findings.length - 12} more`));
+      }
+      if (sendToCopilot) {
+        problems.append(el('button', {
+          class: 'btn btn-sm', style: 'margin-top:8px',
+          onclick: () => sendToCopilot(
+            'Fix the problems the linter found:\n' +
+            findings.map((f) => `- [${f.severity}] ${f.message}`).join('\n')),
+        }, '✨ Fix with copilot'));
+      }
+    }
+    outlineRoot.append(problems);
+  } catch { /* lint is advisory; never block the outline */ }
+
   outlineRoot.append(el('h3', {}, 'Model outline'));
   const byLayer = new Map();
   for (const element of project.model.elements) {
@@ -338,7 +367,7 @@ function buildCopilotPanel(project, config, { onModelUpdated }) {
         ' in .env and restart. You can still draw manually, import exchange files, and seed maps from requests.'),
       log,
     );
-    return panel;
+    return { panel, sendMessage: null };
   }
 
   panel.append(
@@ -348,5 +377,5 @@ function buildCopilotPanel(project, config, { onModelUpdated }) {
         el('button', { class: 'suggestion', onclick: () => submit(suggestion) }, suggestion))),
     el('div', { class: 'copilot-input' }, input, send),
   );
-  return panel;
+  return { panel, sendMessage: submit };
 }
