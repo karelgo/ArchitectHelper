@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>ArchFlow</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='25' fill='%23F0D24B'/><rect y='25' width='100' height='25' fill='%235BC2C2'/><rect y='50' width='100' height='25' fill='%2383CD87'/><rect y='75' width='100' height='25' fill='%23A99BE8'/></svg>" />
+  <script>
+    // Pre-paint: apply the stored theme before CSS renders (no flash).
+    (function () {
+      var theme = localStorage.getItem('archflow-theme');
+      if (theme) document.documentElement.dataset.theme = theme;
+    })();
+  </script>
   <link rel="stylesheet" href="app.css" />
 </head>
 <body>
@@ -18,6 +25,7 @@
       <a href="#/studio" data-nav="studio">Studio</a>
     </nav>
     <div class="topbar-actions">
+      <button class="btn btn-ghost" id="theme-toggle" aria-label="Switch between light and dark theme">◐</button>
       <button class="btn btn-primary" id="new-request-btn">New request</button>
     </div>
   </header>

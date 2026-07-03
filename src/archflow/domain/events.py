@@ -25,6 +25,8 @@ class EventType(StrEnum):
     ARTIFACT_GENERATED = "artifact_generated"
     REVIEW_RECORDED = "review_recorded"
     DECISION_RECORDED = "decision_recorded"
+    OWNER_ASSIGNED = "owner_assigned"
+    AI_DRAFT_SAVED = "ai_draft_saved"
     REQUEST_REJECTED = "request_rejected"
     PUBLISHED = "published"
 

@@ -1,19 +1,41 @@
 // Governance board: pipeline kanban + request drawer with gate-aware actions.
 
 import { api } from './api.js';
-import { el, toast, openDrawer, openModal, stageChip, classificationChip, timeAgo } from './ui.js';
+import {
+  el, toast, openDrawer, openModal, stageChip, classificationChip,
+  timeAgo, initials, invalidate,
+} from './ui.js';
 
 const STAGES = [
   'intake', 'triage', 'stakeholder_analysis', 'drafting',
   'peer_review', 'board_approval', 'publication', 'done', 'rejected',
 ];
+const ACTIVE_STAGES = STAGES.slice(0, 7);
 const STAGE_LABELS = {
   intake: 'Intake', triage: 'Triage', stakeholder_analysis: 'Stakeholder analysis',
   drafting: 'Drafting', peer_review: 'Peer review', board_approval: 'Board approval',
   publication: 'Publication', done: 'Done', rejected: 'Rejected',
 };
+// Time-in-stage before a card starts asking for attention.
+const AGE_WARM_DAYS = 7;
+const AGE_HOT_DAYS = 14;
 
 let assistantOn = false; // set from /ui-config; gates the AI-assist buttons
+// Survives re-renders within the session so refreshes don't drop the filter.
+const filters = { text: '', classification: '', domain: '' };
+
+function matchesFilters(request) {
+  if (filters.classification === 'unclassified' && request.classification) return false;
+  if (filters.classification && filters.classification !== 'unclassified'
+      && request.classification !== filters.classification) return false;
+  if (filters.domain && !request.impacted_domains.includes(filters.domain)) return false;
+  if (filters.text) {
+    const haystack = [request.title, request.requester, request.owner || '',
+      ...request.impacted_domains].join(' ').toLowerCase();
+    if (!haystack.includes(filters.text)) return false;
+  }
+  return true;
+}
 
 export async function renderBoard(root, config = null) {
   // Drawer refreshes re-render without config — keep the last known value then.
@@ -27,6 +49,11 @@ export async function renderBoard(root, config = null) {
     return;
   }
 
+  if (!requests.length) {
+    root.append(emptyBoardState(root));
+    return;
+  }
+
   const active = requests.filter((r) => !['done', 'rejected'].includes(r.stage));
   const kpis = el('div', { class: 'kpis' },
     kpi(active.length, 'In flight'),
@@ -36,17 +63,36 @@ export async function renderBoard(root, config = null) {
   );
 
   const board = el('div', { class: 'board' });
-  for (const stage of STAGES) {
-    const cards = requests.filter((r) => r.stage === stage);
-    board.append(
-      el('div', { class: 'column' },
-        el('div', { class: 'column-head' },
-          STAGE_LABELS[stage],
-          el('span', { class: 'column-count' }, String(cards.length)),
+  function fillBoard() {
+    board.innerHTML = '';
+    const visible = requests.filter(matchesFilters);
+    for (const stage of ACTIVE_STAGES) {
+      const cards = visible.filter((r) => r.stage === stage);
+      board.append(
+        el('div', { class: 'column' },
+          el('div', { class: 'column-head' },
+            STAGE_LABELS[stage],
+            el('span', { class: 'column-count' }, String(cards.length)),
+          ),
+          el('div', { class: 'column-body' },
+            cards.length === 0 ? el('div', { class: 'empty-note' }, '—') :
+            cards.map((request) => requestCard(request)),
+          ),
         ),
+      );
+    }
+    const done = visible.filter((r) => r.stage === 'done').length;
+    const rejected = visible.filter((r) => r.stage === 'rejected').length;
+    board.append(
+      el('div', { class: 'column column-archive' },
+        el('div', { class: 'column-head' }, 'Archive',
+          el('span', { class: 'column-count' }, String(done + rejected))),
         el('div', { class: 'column-body' },
-          cards.length === 0 ? el('div', { class: 'empty-note' }, '—') :
-          cards.map((request) => requestCard(request)),
+          el('a', { class: 'card', href: '#/archive' },
+            el('div', { class: 'card-title' }, 'Done & rejected'),
+            el('div', { class: 'card-meta' },
+              `${done} published · ${rejected} rejected`),
+          ),
         ),
       ),
     );
@@ -56,8 +102,45 @@ export async function renderBoard(root, config = null) {
     el('div', { class: 'page-head' },
       el('h1', {}, 'Governance pipeline'),
     ),
-    kpis, board,
+    kpis,
+    filterBar(requests, fillBoard),
+    board,
   );
+  fillBoard();
+}
+
+function filterBar(requests, apply) {
+  const domains = [...new Set(requests.flatMap((r) => r.impacted_domains))].sort();
+  const search = el('input', {
+    class: 'filter-search', type: 'search', placeholder: 'Filter by title, requester, owner or domain…',
+    value: filters.text,
+    oninput: (event) => { filters.text = event.target.value.trim().toLowerCase(); apply(); },
+  });
+  const classification = el('select', {
+    'aria-label': 'Filter by classification',
+    onchange: (event) => { filters.classification = event.target.value; apply(); },
+  },
+    el('option', { value: '' }, 'Any size'),
+    ['small', 'medium', 'large', 'unclassified'].map((value) =>
+      el('option', { value, selected: filters.classification === value ? '' : undefined }, value)),
+  );
+  const domain = el('select', {
+    'aria-label': 'Filter by domain',
+    onchange: (event) => { filters.domain = event.target.value; apply(); },
+  },
+    el('option', { value: '' }, 'Any domain'),
+    domains.map((value) =>
+      el('option', { value, selected: filters.domain === value ? '' : undefined }, value)),
+  );
+  const clear = el('button', {
+    class: 'btn btn-ghost btn-sm',
+    onclick: () => {
+      filters.text = ''; filters.classification = ''; filters.domain = '';
+      search.value = ''; classification.value = ''; domain.value = '';
+      apply();
+    },
+  }, 'Clear');
+  return el('div', { class: 'filter-bar' }, search, classification, domain, clear);
 }
 
 function kpi(value, label) {
@@ -67,18 +150,127 @@ function kpi(value, label) {
   );
 }
 
+function agingChip(request) {
+  if (['done', 'rejected'].includes(request.stage)) return null;
+  const enteredAt = request.stage_entered_at || request.updated_at;
+  const days = (Date.now() - new Date(enteredAt).getTime()) / 86400000;
+  const heat = days > AGE_HOT_DAYS ? ' age-hot' : days > AGE_WARM_DAYS ? ' age-warm' : '';
+  return el('span', { class: `age${heat}`, title: 'Time in the current stage' },
+    `⏱ ${timeAgo(enteredAt).replace(' ago', '')}`);
+}
+
 function requestCard(request) {
-  return el('div', {
-    class: 'card',
-    onclick: () => { location.hash = `#/request/${request.id}`; },
-  },
+  return el('a', { class: 'card', href: `#/request/${request.id}` },
     el('div', { class: 'card-title' }, request.title),
     el('div', { class: 'card-meta' },
       classificationChip(request.classification),
+      agingChip(request),
+      request.owner
+        ? el('span', { class: 'avatar', title: `Owner: ${request.owner}` }, initials(request.owner))
+        : null,
       request.requester ? `by ${request.requester}` : null,
-      el('span', {}, timeAgo(request.updated_at)),
     ),
   );
+}
+
+function emptyBoardState(root) {
+  return el('div', { class: 'empty-state' },
+    el('div', { class: 'es-stripe', 'aria-hidden': 'true' }),
+    el('h2', {}, 'No requests yet'),
+    el('p', {},
+      'Register an architecture request and ArchFlow walks it through intake, ',
+      'triage, stakeholder analysis, drafting, review, board approval and publication — ',
+      'generating the stakeholder map and PSA on the way.'),
+    el('div', { class: 'es-actions' },
+      el('button', {
+        class: 'btn btn-primary',
+        onclick: () => newRequestModal(() => renderBoard(root)),
+      }, 'Register your first request'),
+      el('button', {
+        class: 'btn',
+        onclick: async () => {
+          try {
+            await api.createRequest({
+              title: 'Example — CRM renewal',
+              description: 'The current CRM is end-of-life; evaluate a SaaS replacement.',
+              requester: 'you',
+              business_goal: 'Higher first-contact resolution',
+              impacted_domains: ['crm'],
+              stakeholders: [
+                { name: 'Sales director', role: 'Sponsor', concerns: ['Adoption', 'Migration'] },
+              ],
+            });
+            toast('Example request created');
+            renderBoard(root);
+          } catch (error) { toast(error.message, 'error'); }
+        },
+      }, 'Seed an example to explore'),
+    ),
+  );
+}
+
+export async function renderArchive(root) {
+  root.innerHTML = '';
+  let requests;
+  try {
+    requests = await api.listRequests();
+  } catch (error) {
+    root.append(el('p', { class: 'empty-note' }, `Could not load requests: ${error.message}`));
+    return;
+  }
+  const terminal = requests
+    .filter((r) => ['done', 'rejected'].includes(r.stage))
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+
+  const tableHost = el('div', { class: 'table-scroll' });
+  const search = el('input', {
+    class: 'filter-search', type: 'search', placeholder: 'Filter the archive…',
+    oninput: (event) => fillTable(event.target.value.trim().toLowerCase()),
+  });
+
+  function fillTable(text = '') {
+    tableHost.innerHTML = '';
+    const rows = terminal.filter((r) =>
+      !text || [r.title, r.requester, r.owner || ''].join(' ').toLowerCase().includes(text));
+    if (!rows.length) {
+      tableHost.append(el('p', { class: 'empty-note' },
+        terminal.length
+          ? 'Nothing matches the filter.'
+          : 'Nothing here yet — published and rejected requests land in this archive.'));
+      return;
+    }
+    tableHost.append(el('table', { class: 'archive-table' },
+      el('thead', {}, el('tr', {},
+        ['Request', 'Outcome', 'Size', 'Requester', 'Owner', 'Closed'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, rows.map((request) => el('tr', {
+        tabindex: '0', role: 'button',
+        onclick: () => openRequestDrawer(request.id, root),
+        onkeydown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            openRequestDrawer(request.id, root);
+          }
+        },
+      },
+        el('td', {}, request.title),
+        el('td', {}, stageChip(request.stage)),
+        el('td', {}, classificationChip(request.classification)),
+        el('td', {}, request.requester || '—'),
+        el('td', {}, request.owner || '—'),
+        el('td', {}, timeAgo(request.updated_at)),
+      ))),
+    ));
+  }
+
+  root.append(
+    el('div', { class: 'page-head' },
+      el('h1', {}, 'Archive'),
+      el('a', { class: 'btn', href: '#/board' }, '← Board'),
+    ),
+    el('div', { class: 'filter-bar' }, search),
+    tableHost,
+  );
+  fillTable();
 }
 
 function copyLink(requestId) {
@@ -103,10 +295,12 @@ export async function openRequestDrawer(requestId, root) {
   const refresh = async () => { await render(); renderBoard(root); };
 
   async function render() {
-    let request, events, gate;
+    let request, events, gate, drafts;
     try {
-      [request, events, gate] = await Promise.all(
-        [api.getRequest(requestId), api.events(requestId), api.gate(requestId)]);
+      [request, events, gate, drafts] = await Promise.all([
+        api.getRequest(requestId), api.events(requestId),
+        api.gate(requestId), api.aiDrafts(requestId),
+      ]);
     } catch (error) {
       toast(error.message, 'error');
       close();
@@ -121,6 +315,9 @@ export async function openRequestDrawer(requestId, root) {
       el('div', { class: 'drawer-title' }, request.title),
       el('div', { class: 'drawer-sub' },
         stageChip(request.stage), ' ', classificationChip(request.classification),
+        request.owner
+          ? el('span', { class: 'avatar', title: `Owner: ${request.owner}` }, initials(request.owner))
+          : null,
         request.impacted_domains.length ? ` · ${request.impacted_domains.join(', ')}` : '',
         ' ',
         el('button', { class: 'btn btn-ghost btn-sm', onclick: () => copyLink(requestId) }, '🔗 Copy link'),
@@ -176,26 +373,50 @@ export async function openRequestDrawer(requestId, root) {
     ));
     if (gatePanel) body.append(gatePanel);
 
+    // --- owner ------------------------------------------------------------------
+    if (!terminal) {
+      body.append(el('h3', {}, 'Owner'), ownerForm(request, refresh));
+    }
+
     // --- AI assist (drafts only — the human applies/records) --------------------
     if (assistantOn && !terminal) {
       const aiRow = el('div', { class: 'inline-form' });
+      const lastDraft = (kind, open) => {
+        const stored = drafts[kind];
+        if (!stored) return null;
+        return el('button', {
+          class: 'btn btn-ghost btn-sm',
+          onclick: () => open(stored.payload),
+        }, `View last draft (${timeAgo(stored.created_at)})`);
+      };
+      const pieces = [];
       if (['intake', 'triage', 'stakeholder_analysis'].includes(request.stage)) {
-        aiRow.append(aiButton('✨ Draft stakeholder analysis', async () => {
-          const proposal = await api.aiStakeholders(requestId);
-          proposalModal(request, proposal, refresh);
-        }));
+        pieces.push(
+          aiButton('✨ Draft stakeholder analysis', async () => {
+            const proposal = await api.aiStakeholders(requestId);
+            proposalModal(request, proposal, refresh);
+          }),
+          lastDraft('stakeholders', (payload) => proposalModal(request, payload, refresh)),
+        );
       }
       if (['stakeholder_analysis', 'drafting', 'peer_review'].includes(request.stage)) {
-        aiRow.append(aiButton('✨ Draft PSA', async () => {
-          const draft = await api.aiPsa(requestId);
-          psaModal(request, draft.markdown, refresh);
-        }));
+        pieces.push(
+          aiButton('✨ Draft PSA', async () => {
+            const draft = await api.aiPsa(requestId);
+            psaModal(request, draft.markdown, refresh);
+          }),
+          lastDraft('psa', (payload) => psaModal(request, payload.markdown, refresh)),
+        );
       }
       if (['peer_review', 'board_approval'].includes(request.stage)) {
-        aiRow.append(aiButton('✨ AI pre-review', async () => {
-          reviewModal(await api.aiReview(requestId));
-        }));
+        pieces.push(
+          aiButton('✨ AI pre-review', async () => {
+            reviewModal(await api.aiReview(requestId));
+          }),
+          lastDraft('review', (payload) => reviewModal(payload)),
+        );
       }
+      aiRow.append(...pieces.filter(Boolean));
       if (aiRow.childElementCount) body.append(el('h3', {}, 'AI assist'), aiRow);
     }
 
@@ -380,6 +601,22 @@ function describeEvent(event) {
   return '';
 }
 
+function ownerForm(request, refresh) {
+  const owner = el('input', {
+    placeholder: 'Responsible architect (empty to clear)', value: request.owner || '',
+  });
+  return el('div', { class: 'inline-form' }, owner,
+    el('button', {
+      class: 'btn', onclick: async () => {
+        try {
+          await api.setOwner(request.id, owner.value.trim());
+          toast(owner.value.trim() ? `Owner set to ${owner.value.trim()}` : 'Owner cleared');
+          refresh();
+        } catch (error) { toast(error.message, 'error'); }
+      },
+    }, 'Assign'));
+}
+
 function triageForm(request, refresh) {
   const select = el('select', {},
     ['small', 'medium', 'large'].map((value) =>
@@ -407,7 +644,7 @@ function stakeholderForm(requestId, refresh) {
   return el('div', { class: 'inline-form' }, name, role, concerns,
     el('button', {
       class: 'btn', onclick: async () => {
-        if (!name.value.trim()) return;
+        if (!name.value.trim()) { invalidate(name, 'Give the stakeholder a name'); return; }
         try {
           await api.addStakeholder(requestId, {
             name: name.value.trim(), role: role.value.trim(),
@@ -428,7 +665,7 @@ function reviewForm(requestId, refresh) {
   return el('div', { class: 'inline-form' }, reviewer, verdict, comments,
     el('button', {
       class: 'btn', onclick: async () => {
-        if (!reviewer.value.trim()) return;
+        if (!reviewer.value.trim()) { invalidate(reviewer, 'Who is reviewing?'); return; }
         try {
           await api.review(requestId, {
             reviewer: reviewer.value.trim(), verdict: verdict.value, comments: comments.value,
@@ -449,7 +686,7 @@ function decisionForm(request, refresh) {
   return el('div', { class: 'inline-form' }, title, status, decidedBy,
     el('button', {
       class: 'btn', onclick: async () => {
-        if (!title.value.trim()) return;
+        if (!title.value.trim()) { invalidate(title, 'A decision needs a title'); return; }
         try {
           await api.decide(request.id, {
             title: title.value.trim(), status: status.value, decided_by: decidedBy.value.trim(),
@@ -470,6 +707,7 @@ function rejectForm(requestId, refresh) {
       el('button', { class: 'btn', onclick: () => close() }, 'Cancel'),
       el('button', {
         class: 'btn btn-danger', onclick: async () => {
+          if (!reason.value.trim()) { invalidate(reason, 'Say why — the audit trail keeps it'); return; }
           try {
             await api.reject(requestId, { actor: actor.value || 'ui', reason: reason.value });
             toast('Request rejected'); close(); refresh();
@@ -505,7 +743,7 @@ export function newRequestModal(onCreated) {
       el('button', {
         class: 'btn btn-primary', onclick: async () => {
           const title = fields.title.value.trim();
-          if (!title) { toast('A title is required', 'error'); return; }
+          if (!title) { invalidate(fields.title, 'Give the request a title'); return; }
           const stakeholders = fields.stakeholders.value.split('\n')
             .map((line) => line.trim()).filter(Boolean)
             .map((line) => {

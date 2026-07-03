@@ -55,6 +55,11 @@ class UiConfig(BaseModel):
     version: str
 
 
+class OwnerIn(BaseModel):
+    owner: str = ""  # empty clears the assignment
+    actor: str = "api"
+
+
 def create_app(
     engine: WorkflowEngine | None = None,
     studio: StudioService | None = None,
@@ -228,6 +233,15 @@ def create_app(
         return run(
             lambda: wf.complete_item(request_id, key, actor=(payload.actor if payload else "api"))
         )
+
+    @app.post(
+        "/requests/{request_id}/owner",
+        response_model=ArchitectureRequest,
+        tags=["workflow"],
+        summary="Assign (or clear) the architect responsible for the request",
+    )
+    def set_owner(request_id: str, payload: OwnerIn) -> ArchitectureRequest:
+        return run(lambda: wf.set_owner(request_id, payload.owner, actor=payload.actor))
 
     @app.post(
         "/requests/{request_id}/reject",

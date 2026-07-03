@@ -10,6 +10,7 @@ from archflow.config import Settings, get_settings
 from archflow.domain.events import Event, EventType
 from archflow.domain.models import (
     PIPELINE,
+    AiDraft,
     ArchitectureRequest,
     Artifact,
     Assessment,
@@ -195,6 +196,7 @@ class WorkflowEngine:
         generated = self._actions.on_exit(from_stage, ctx)
 
         request.stage = to_stage
+        request.stage_entered_at = utcnow()
         request.touch()
 
         generated += self._actions.on_enter(to_stage, ctx)
@@ -231,6 +233,7 @@ class WorkflowEngine:
         """Reject the request (terminal side-exit)."""
         request = self._load(request_id)
         request.stage = Stage.REJECTED
+        request.stage_entered_at = utcnow()
         request.touch()
         self._repo.save(request)
         self._emit(
@@ -239,6 +242,33 @@ class WorkflowEngine:
         return request
 
     # -- recording ----------------------------------------------------------
+
+    def set_owner(self, request_id: str, owner: str, actor: str = "system") -> ArchitectureRequest:
+        """Assign (or clear) the architect responsible for the request."""
+        request = self._load(request_id)
+        request.owner = owner.strip()
+        request.touch()
+        self._repo.save(request)
+        self._emit(
+            request_id, EventType.OWNER_ASSIGNED, actor=actor, payload={"owner": request.owner}
+        )
+        return request
+
+    def record_ai_draft(
+        self, request_id: str, kind: str, payload: dict[str, Any], actor: str = "assistant"
+    ) -> ArchitectureRequest:
+        """Store the latest AI draft of one kind on the request.
+
+        Drafts are advisory material a human filters; keeping the latest one
+        means a paid-for draft survives closing the dialog and the applied
+        outcome can be compared with what was proposed.
+        """
+        request = self._load(request_id)
+        request.ai_drafts[kind] = AiDraft(kind=kind, payload=payload)
+        request.touch()
+        self._repo.save(request)
+        self._emit(request_id, EventType.AI_DRAFT_SAVED, actor=actor, payload={"kind": kind})
+        return request
 
     def complete_item(self, request_id: str, key: str, actor: str) -> ArchitectureRequest:
         """Manually mark one checklist item done.

@@ -441,3 +441,28 @@ def test_route_503_without_key_and_404_unknown_request(tmp_path: Path) -> None:
 
     with_assistant, _ = make_client(tmp_path, scripted_assistant([]))
     assert with_assistant.post("/requests/nope/assistant/stakeholders").status_code == 404
+
+
+def test_drafts_are_persisted_and_listable(tmp_path: Path) -> None:
+    assistant = scripted_assistant(
+        [
+            FakeResponse(
+                content=[
+                    FakeBlock(
+                        type="tool_use",
+                        name="submit_stakeholder_analysis",
+                        input=PROPOSAL_PAYLOAD,
+                    )
+                ],
+                stop_reason="tool_use",
+            )
+        ]
+    )
+    client, engine = make_client(tmp_path, assistant)
+    request = engine.create_request("R", description="d", requester="r")
+
+    assert client.get(f"/requests/{request.id}/assistant/drafts").json() == {}
+    client.post(f"/requests/{request.id}/assistant/stakeholders")
+    drafts = client.get(f"/requests/{request.id}/assistant/drafts").json()
+    assert set(drafts) == {"stakeholders"}
+    assert drafts["stakeholders"]["payload"]["stakeholders"][0]["name"] == "CISO"

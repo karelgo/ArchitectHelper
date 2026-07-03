@@ -204,6 +204,20 @@ def add_stakeholder(
 
 
 @app.command()
+def assign(
+    request_id: str,
+    owner: Annotated[str, typer.Option(help="Responsible architect (empty clears it)")],
+    actor: Annotated[str, typer.Option(help="Who assigns")] = "cli",
+) -> None:
+    """Assign the architect responsible for moving the request."""
+    engine = _engine()
+    _run(lambda: engine.set_owner(request_id, owner, actor=actor))
+    typer.secho(
+        f"Owner {'cleared' if not owner.strip() else 'set to ' + owner}", fg=typer.colors.GREEN
+    )
+
+
+@app.command()
 def review(
     request_id: str,
     reviewer: Annotated[str, typer.Option(help="Reviewer name")],

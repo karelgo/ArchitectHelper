@@ -19,6 +19,20 @@ plus artifacts, an inline **stakeholder-map preview**
 audit timeline. **New request** registers an intake with stakeholders in
 `Name : Role : concern | concern` format.
 
+The board stays workable at scale: a filter bar narrows by text,
+classification or domain; cards carry a time-in-stage clock (amber past 7
+days, red past 14) and the owner's initials (assign via the drawer, the
+API's `POST /requests/{id}/owner`, or `archflow assign`); finished and
+rejected requests collapse into an **Archive** column that opens a
+filterable table at `#/archive`. AI drafts persist on the request
+(`GET /requests/{id}/assistant/drafts`) so a paid-for draft survives
+closing the dialog — the drawer offers "View last draft" next to each
+assist button. A first run greets an empty board with seed-an-example.
+The whole UI ships a **dark theme** (topbar toggle, follows the OS
+preference, remembered per browser) and a keyboard/screen-reader floor:
+dialogs trap and return focus, Escape closes, cards are real links,
+every field has an accessible name, and validation errors are announced.
+
 ### AI assist in the drawer
 
 With an API key configured, the drawer offers stage-matched draft buttons.

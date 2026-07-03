@@ -28,6 +28,7 @@ export const api = {
   createRequest: (payload) => request('POST', '/requests', payload),
   advance: (id) => request('POST', `/requests/${id}/advance`, { actor: 'ui' }),
   gate: (id) => request('GET', `/requests/${id}/gate`),
+  setOwner: (id, owner) => request('POST', `/requests/${id}/owner`, { owner, actor: 'ui' }),
   triage: (id, payload) => request('POST', `/requests/${id}/triage`, payload),
   addStakeholder: (id, payload) => request('POST', `/requests/${id}/stakeholders`, payload),
   review: (id, payload) => request('POST', `/requests/${id}/reviews`, payload),
@@ -83,6 +84,7 @@ export const api = {
   mapUrl: (id, rev) => `/requests/${id}/map.svg?rev=${encodeURIComponent(rev || '')}`,
 
   // Governance assistants (drafts only — humans apply)
+  aiDrafts: (id) => request('GET', `/requests/${id}/assistant/drafts`),
   aiStakeholders: (id) => request('POST', `/requests/${id}/assistant/stakeholders`),
   aiApplyStakeholders: (id, proposal, actor = 'ui') =>
     request('POST', `/requests/${id}/assistant/stakeholders/apply`, { proposal, actor }),

@@ -1,15 +1,19 @@
 // App shell: hash router + boot.
 
 import { api } from './api.js';
-import { renderBoard, newRequestModal, openRequestDrawer } from './board.js';
+import { renderBoard, renderArchive, newRequestModal, openRequestDrawer } from './board.js';
 import { renderStudioList, renderStudioEditor } from './studio.js';
+import { toggleTheme } from './ui.js';
 
 const root = document.getElementById('view-root');
 let config = { drawio_embed_url: 'https://embed.diagrams.net', assistant_available: false };
 
 function setActiveNav(name) {
   document.querySelectorAll('.nav a').forEach((link) => {
-    link.classList.toggle('active', link.dataset.nav === name);
+    const active = link.dataset.nav === name;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
   });
 }
 
@@ -26,6 +30,9 @@ async function route() {
   } else if (hash.startsWith('#/studio')) {
     setActiveNav('studio');
     await renderStudioList(root);
+  } else if (hash.startsWith('#/archive')) {
+    setActiveNav('board');
+    await renderArchive(root);
   } else if (requestMatch) {
     // Deep link: the board behind, the request's drawer on top.
     setActiveNav('board');
@@ -40,6 +47,7 @@ async function route() {
 document.getElementById('new-request-btn').addEventListener('click', () => {
   newRequestModal(() => route());
 });
+document.getElementById('theme-toggle').addEventListener('click', () => toggleTheme());
 window.addEventListener('hashchange', route);
 
 (async function boot() {

@@ -19,6 +19,7 @@ from archflow.assistant.governance import (
     save_psa_draft,
 )
 from archflow.config import Settings
+from archflow.domain.models import AiDraft
 from archflow.workflow.engine import GuardViolation, WorkflowEngine
 
 T = TypeVar("T")
@@ -79,7 +80,9 @@ def build_assistant_router(
     )
     def draft_stakeholders(request_id: str) -> StakeholderProposal:
         request = run(lambda: engine.load(request_id))
-        return make_assistant().draft_stakeholder_analysis(request)
+        proposal = make_assistant().draft_stakeholder_analysis(request)
+        engine.record_ai_draft(request_id, "stakeholders", proposal.model_dump())
+        return proposal
 
     @router.post(
         "/stakeholders/apply",
@@ -126,6 +129,7 @@ def build_assistant_router(
                 request, current_psa=existing_psa_text(request)
             )
             markdown = f"# Project Start Architecture: {request.title}\n\n{generated}"
+            engine.record_ai_draft(request_id, "psa", {"markdown": markdown})
 
         saved_path: str | None = None
         if payload and payload.save:
@@ -139,6 +143,16 @@ def build_assistant_router(
     )
     def draft_review(request_id: str) -> ReviewDraft:
         request = run(lambda: engine.load(request_id))
-        return make_assistant().pre_review(request, psa_text=existing_psa_text(request))
+        draft = make_assistant().pre_review(request, psa_text=existing_psa_text(request))
+        engine.record_ai_draft(request_id, "review", draft.model_dump())
+        return draft
+
+    @router.get(
+        "/drafts",
+        response_model=dict[str, AiDraft],
+        summary="The latest stored AI draft per kind (stakeholders / psa / review)",
+    )
+    def drafts(request_id: str) -> dict[str, AiDraft]:
+        return run(lambda: engine.load(request_id)).ai_drafts
 
     return router

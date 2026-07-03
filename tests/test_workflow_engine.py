@@ -348,3 +348,33 @@ def test_regenerated_artifact_replaces_record_for_same_path(tmp_path: Path) -> N
     loaded = engine.load(request.id)
     map_artifacts = [a for a in loaded.artifacts if a.kind == ArtifactKind.STAKEHOLDER_MAP]
     assert len(map_artifacts) == 1
+
+
+def test_set_owner_and_stage_timer(engine: WorkflowEngine, event_log: EventLog) -> None:
+    request = engine.create_request("Owned", description="d", requester="r")
+    first_entered = request.stage_entered_at
+
+    engine.set_owner(request.id, "  a.jansen  ", actor="lead")
+    reloaded = engine.load(request.id)
+    assert reloaded.owner == "a.jansen"
+    assert any(
+        e.type == EventType.OWNER_ASSIGNED and e.payload["owner"] == "a.jansen"
+        for e in event_log.for_request(request.id)
+    )
+
+    engine.advance(request.id)  # -> triage resets the stage clock
+    assert engine.load(request.id).stage_entered_at >= first_entered
+
+    engine.set_owner(request.id, "", actor="lead")
+    assert engine.load(request.id).owner == ""
+
+
+def test_record_ai_draft_keeps_latest_per_kind(engine: WorkflowEngine) -> None:
+    request = engine.create_request("Drafted", description="d", requester="r")
+    engine.record_ai_draft(request.id, "psa", {"markdown": "v1"})
+    engine.record_ai_draft(request.id, "psa", {"markdown": "v2"})
+    engine.record_ai_draft(request.id, "review", {"summary": "s"})
+
+    reloaded = engine.load(request.id)
+    assert set(reloaded.ai_drafts) == {"psa", "review"}
+    assert reloaded.ai_drafts["psa"].payload == {"markdown": "v2"}

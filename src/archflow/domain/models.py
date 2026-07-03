@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -180,6 +181,14 @@ class Decision(BaseModel):
     stage: Stage | None = None
 
 
+class AiDraft(BaseModel):
+    """One stored assistant draft (proposal, PSA markdown, or review)."""
+
+    kind: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class ArchitectureRequest(BaseModel):
     """Aggregate root: one architecture change moving through the process."""
 
@@ -190,7 +199,9 @@ class ArchitectureRequest(BaseModel):
     business_goal: str = ""
     impacted_domains: list[str] = Field(default_factory=list)
     classification: Classification | None = None
+    owner: str = ""  # the architect responsible for moving the request
     stage: Stage = Stage.INTAKE
+    stage_entered_at: datetime = Field(default_factory=utcnow)
 
     stakeholders: list[Stakeholder] = Field(default_factory=list)
     drivers: list[Driver] = Field(default_factory=list)
@@ -201,6 +212,10 @@ class ArchitectureRequest(BaseModel):
     checklist: list[ChecklistItem] = Field(default_factory=list)
     reviews: list[Review] = Field(default_factory=list)
     decisions: list[Decision] = Field(default_factory=list)
+
+    #: Latest AI draft per kind ('stakeholders' | 'psa' | 'review') — kept so
+    #: paid-for drafts survive closing the dialog and stay auditable.
+    ai_drafts: dict[str, AiDraft] = Field(default_factory=dict)
 
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

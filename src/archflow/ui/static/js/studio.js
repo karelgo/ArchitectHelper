@@ -1,7 +1,7 @@
 // Studio: view-project gallery + 3-pane editor (outline | draw.io | copilot).
 
 import { api } from './api.js';
-import { el, toast, openModal } from './ui.js';
+import { currentTheme, el, invalidate, openModal, toast } from './ui.js';
 
 const LAYER_COLORS = {
   motivation: '#CCCCFF', strategy: '#F5DEAA', business: '#FFFF99',
@@ -35,9 +35,10 @@ export async function renderStudioList(root) {
   }
 
   const grid = el('div', { class: 'studio-list' },
-    el('div', { class: 'project-card new', onclick: () => newProjectModal() }, '+ New view project'),
-    projects.map((project) => el('div', {
-      class: 'project-card', onclick: () => { location.hash = `#/studio/${project.id}`; },
+    el('button', { class: 'project-card new', type: 'button', onclick: () => newProjectModal() },
+      '+ New view project'),
+    projects.map((project) => el('a', {
+      class: 'project-card', href: `#/studio/${project.id}`,
     },
       el('img', {
         class: 'pc-thumb', alt: '', loading: 'lazy',
@@ -56,6 +57,9 @@ export async function renderStudioList(root) {
       el('button', { class: 'btn', onclick: () => importModal() }, 'Import exchange file'),
     ),
     grid,
+    projects.length ? null : el('p', { class: 'empty-note', style: 'margin-top:12px' },
+      'Views seeded from governance requests land here too — open a request on the board ',
+      'and press "Open map in Studio", or import an ArchiMate Open Exchange file.'),
   );
 }
 
@@ -69,7 +73,7 @@ function newProjectModal() {
       el('button', { class: 'btn', onclick: () => close() }, 'Cancel'),
       el('button', {
         class: 'btn btn-primary', onclick: async () => {
-          if (!name.value.trim()) return;
+          if (!name.value.trim()) { invalidate(name, 'Give the project a name'); return; }
           try {
             const project = await api.createProject({ name: name.value.trim(), description: description.value });
             close(); location.hash = `#/studio/${project.id}`;
@@ -217,7 +221,8 @@ async function renderOutline(outlineRoot, project, sendToCopilot) {
 // draw.io embed via the official postMessage JSON protocol.
 function createDrawioEmbed(config, projectId, saveState) {
   const origin = config.drawio_embed_url.replace(/\/$/, '');
-  const src = `${origin}/?embed=1&proto=json&spin=1&noSaveBtn=0&saveAndExit=0&noExitBtn=1&ui=atlas`;
+  const ui = currentTheme() === 'dark' ? 'dark' : 'atlas';
+  const src = `${origin}/?embed=1&proto=json&spin=1&noSaveBtn=0&saveAndExit=0&noExitBtn=1&ui=${ui}`;
   const frame = el('iframe', { class: 'drawio-frame', src, title: 'draw.io editor' });
   const previewImg = el('img', {
     class: 'canvas-preview', alt: 'Read-only preview of the current view',

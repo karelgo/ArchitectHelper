@@ -285,3 +285,11 @@ def test_request_map_svg(client: TestClient) -> None:
     assert "Alice" in response.text, "stakeholders appear on the rendered map"
 
     assert client.get("/requests/nope/map.svg").status_code == 404
+
+
+def test_owner_route(client: TestClient) -> None:
+    request_id = create_request(client)
+    response = client.post(f"/requests/{request_id}/owner", json={"owner": "a.jansen"})
+    assert response.status_code == 200
+    assert response.json()["owner"] == "a.jansen"
+    assert client.post("/requests/nope/owner", json={"owner": "x"}).status_code == 404
