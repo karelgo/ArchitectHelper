@@ -79,6 +79,14 @@ Prefer HTTP? `archflow serve` starts a REST API with interactive docs at
 
 Details: [docs/studio.md](docs/studio.md).
 
+## Deploying
+
+One container, one volume: `docker build -t archflow . && docker run -p
+8000:8000 -v archflow-data:/data archflow` — then open `/ui/`. The same
+image runs on Fly.io/Render/Railway or any VM. ArchFlow has **no built-in
+authentication**: keep it on a private network or behind an auth proxy.
+Details: [docs/deployment.md](docs/deployment.md).
+
 ## BiZZdesign Horizzon
 
 Configure your tenant in `.env` (see `.env.example`) and publication pushes

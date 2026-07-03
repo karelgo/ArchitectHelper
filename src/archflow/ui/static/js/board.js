@@ -15,8 +15,9 @@ const STAGE_LABELS = {
 
 let assistantOn = false; // set from /ui-config; gates the AI-assist buttons
 
-export async function renderBoard(root, config = {}) {
-  assistantOn = Boolean(config.assistant_available);
+export async function renderBoard(root, config = null) {
+  // Drawer refreshes re-render without config — keep the last known value then.
+  if (config !== null) assistantOn = Boolean(config.assistant_available);
   root.innerHTML = '';
   let requests;
   try {

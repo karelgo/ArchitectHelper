@@ -1,0 +1,14 @@
+.git
+.venv
+.env
+__pycache__
+*.pyc
+*.db
+artifacts/
+tests/
+docs/
+scripts/
+.github/
+.claude/
+AGENTS.md
+CLAUDE.md
